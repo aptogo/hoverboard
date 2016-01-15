@@ -1,4 +1,4 @@
-(function(f){if(typeof exports==="object"&&typeof module!=="undefined"){module.exports=f()}else if(typeof define==="function"&&define.amd){define([],f)}else{var g;if(typeof window!=="undefined"){g=window}else if(typeof global!=="undefined"){g=global}else if(typeof self!=="undefined"){g=self}else{g=this}g.Hoverboard = f()}})(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+!function(e){if("object"==typeof exports&&"undefined"!=typeof module)module.exports=e();else if("function"==typeof define&&define.amd)define([],e);else{var o;"undefined"!=typeof window?o=window:"undefined"!=typeof global?o=global:"undefined"!=typeof self&&(o=self),o.Hoverboard=e()}}(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
 !function() {
   var topojson = {
     version: "1.6.19",
@@ -674,6 +674,9 @@ module.exports = L.TileLayer.Canvas.extend({
       return;
     }
 
+    var startTime = performance.now();
+
+
     this._adjustTilePoint(tilePoint);
 
     var animationFrame;
@@ -685,18 +688,18 @@ module.exports = L.TileLayer.Canvas.extend({
         throw err;
       }
 
-      var offScreenCanvas = document.createElement('canvas');
+      var startTime = performance.now();
 
-      self.drawData(offScreenCanvas, canvas, tilePoint, result, function(){
-        //skip rendering (empty tile)
-        self.tileDrawn(canvas);
-      }, function(err){
+      var offScreenCanvas = document.createElement('canvas');
+      offScreenCanvas.width = canvas.width;
+      offScreenCanvas.height = canvas.height;
+
+      self.drawData(offScreenCanvas, tilePoint, result, function(err){
         animationFrame && window.cancelAnimationFrame(animationFrame);
         animationFrame = window.requestAnimationFrame(function(){
-          canvas.width = offScreenCanvas.width;
-          canvas.height = offScreenCanvas.height;
           canvas.getContext('2d').drawImage(offScreenCanvas, 0, 0);
           self.tileDrawn(canvas);
+          console.log('Render: ' + (performance.now() - startTime) + 'ms');
         });
 
         if (err) {

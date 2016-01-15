@@ -137,6 +137,9 @@ module.exports = L.TileLayer.Canvas.extend({
       return;
     }
 
+    var startTime = performance.now();
+
+
     this._adjustTilePoint(tilePoint);
 
     var animationFrame;
@@ -148,18 +151,18 @@ module.exports = L.TileLayer.Canvas.extend({
         throw err;
       }
 
-      var offScreenCanvas = document.createElement('canvas');
+      var startTime = performance.now();
 
-      self.drawData(offScreenCanvas, canvas, tilePoint, result, function(){
-        //skip rendering (empty tile)
-        self.tileDrawn(canvas);
-      }, function(err){
+      var offScreenCanvas = document.createElement('canvas');
+      offScreenCanvas.width = canvas.width;
+      offScreenCanvas.height = canvas.height;
+
+      self.drawData(offScreenCanvas, tilePoint, result, function(err){
         animationFrame && window.cancelAnimationFrame(animationFrame);
         animationFrame = window.requestAnimationFrame(function(){
-          canvas.width = offScreenCanvas.width;
-          canvas.height = offScreenCanvas.height;
           canvas.getContext('2d').drawImage(offScreenCanvas, 0, 0);
           self.tileDrawn(canvas);
+          console.log('Render: ' + (performance.now() - startTime) + 'ms');
         });
 
         if (err) {
