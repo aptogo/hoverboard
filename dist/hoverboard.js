@@ -31,6 +31,683 @@
 
 
 },{}],2:[function(require,module,exports){
+'use strict';
+
+// lightweight Buffer shim for pbf browser build
+// based on code from github.com/feross/buffer (MIT-licensed)
+
+module.exports = Buffer;
+
+var ieee754 = require('ieee754');
+
+var BufferMethods;
+
+function Buffer(length) {
+    var arr;
+    if (length && length.length) {
+        arr = length;
+        length = arr.length;
+    }
+    var buf = new Uint8Array(length || 0);
+    if (arr) buf.set(arr);
+
+    buf.readUInt32LE = BufferMethods.readUInt32LE;
+    buf.writeUInt32LE = BufferMethods.writeUInt32LE;
+    buf.readInt32LE = BufferMethods.readInt32LE;
+    buf.writeInt32LE = BufferMethods.writeInt32LE;
+    buf.readFloatLE = BufferMethods.readFloatLE;
+    buf.writeFloatLE = BufferMethods.writeFloatLE;
+    buf.readDoubleLE = BufferMethods.readDoubleLE;
+    buf.writeDoubleLE = BufferMethods.writeDoubleLE;
+    buf.toString = BufferMethods.toString;
+    buf.write = BufferMethods.write;
+    buf.slice = BufferMethods.slice;
+    buf.copy = BufferMethods.copy;
+
+    buf._isBuffer = true;
+    return buf;
+}
+
+var lastStr, lastStrEncoded;
+
+BufferMethods = {
+    readUInt32LE: function(pos) {
+        return ((this[pos]) |
+            (this[pos + 1] << 8) |
+            (this[pos + 2] << 16)) +
+            (this[pos + 3] * 0x1000000);
+    },
+
+    writeUInt32LE: function(val, pos) {
+        this[pos] = val;
+        this[pos + 1] = (val >>> 8);
+        this[pos + 2] = (val >>> 16);
+        this[pos + 3] = (val >>> 24);
+    },
+
+    readInt32LE: function(pos) {
+        return ((this[pos]) |
+            (this[pos + 1] << 8) |
+            (this[pos + 2] << 16)) +
+            (this[pos + 3] << 24);
+    },
+
+    readFloatLE:  function(pos) { return ieee754.read(this, pos, true, 23, 4); },
+    readDoubleLE: function(pos) { return ieee754.read(this, pos, true, 52, 8); },
+
+    writeFloatLE:  function(val, pos) { return ieee754.write(this, val, pos, true, 23, 4); },
+    writeDoubleLE: function(val, pos) { return ieee754.write(this, val, pos, true, 52, 8); },
+
+    toString: function(encoding, start, end) {
+        var str = '',
+            tmp = '';
+
+        start = start || 0;
+        end = Math.min(this.length, end || this.length);
+
+        for (var i = start; i < end; i++) {
+            var ch = this[i];
+            if (ch <= 0x7F) {
+                str += decodeURIComponent(tmp) + String.fromCharCode(ch);
+                tmp = '';
+            } else {
+                tmp += '%' + ch.toString(16);
+            }
+        }
+
+        str += decodeURIComponent(tmp);
+
+        return str;
+    },
+
+    write: function(str, pos) {
+        var bytes = str === lastStr ? lastStrEncoded : encodeString(str);
+        for (var i = 0; i < bytes.length; i++) {
+            this[pos + i] = bytes[i];
+        }
+    },
+
+    slice: function(start, end) {
+        return this.subarray(start, end);
+    },
+
+    copy: function(buf, pos) {
+        pos = pos || 0;
+        for (var i = 0; i < this.length; i++) {
+            buf[pos + i] = this[i];
+        }
+    }
+};
+
+BufferMethods.writeInt32LE = BufferMethods.writeUInt32LE;
+
+Buffer.byteLength = function(str) {
+    lastStr = str;
+    lastStrEncoded = encodeString(str);
+    return lastStrEncoded.length;
+};
+
+Buffer.isBuffer = function(buf) {
+    return !!(buf && buf._isBuffer);
+};
+
+function encodeString(str) {
+    var length = str.length,
+        bytes = [];
+
+    for (var i = 0, c, lead; i < length; i++) {
+        c = str.charCodeAt(i); // code point
+
+        if (c > 0xD7FF && c < 0xE000) {
+
+            if (lead) {
+                if (c < 0xDC00) {
+                    bytes.push(0xEF, 0xBF, 0xBD);
+                    lead = c;
+                    continue;
+
+                } else {
+                    c = lead - 0xD800 << 10 | c - 0xDC00 | 0x10000;
+                    lead = null;
+                }
+
+            } else {
+                if (c > 0xDBFF || (i + 1 === length)) bytes.push(0xEF, 0xBF, 0xBD);
+                else lead = c;
+
+                continue;
+            }
+
+        } else if (lead) {
+            bytes.push(0xEF, 0xBF, 0xBD);
+            lead = null;
+        }
+
+        if (c < 0x80) bytes.push(c);
+        else if (c < 0x800) bytes.push(c >> 0x6 | 0xC0, c & 0x3F | 0x80);
+        else if (c < 0x10000) bytes.push(c >> 0xC | 0xE0, c >> 0x6 & 0x3F | 0x80, c & 0x3F | 0x80);
+        else bytes.push(c >> 0x12 | 0xF0, c >> 0xC & 0x3F | 0x80, c >> 0x6 & 0x3F | 0x80, c & 0x3F | 0x80);
+    }
+    return bytes;
+}
+
+},{"ieee754":4}],3:[function(require,module,exports){
+(function (global){
+'use strict';
+
+module.exports = Pbf;
+
+var Buffer = global.Buffer || require('./buffer');
+
+function Pbf(buf) {
+    this.buf = !Buffer.isBuffer(buf) ? new Buffer(buf || 0) : buf;
+    this.pos = 0;
+    this.length = this.buf.length;
+}
+
+Pbf.Varint  = 0; // varint: int32, int64, uint32, uint64, sint32, sint64, bool, enum
+Pbf.Fixed64 = 1; // 64-bit: double, fixed64, sfixed64
+Pbf.Bytes   = 2; // length-delimited: string, bytes, embedded messages, packed repeated fields
+Pbf.Fixed32 = 5; // 32-bit: float, fixed32, sfixed32
+
+var SHIFT_LEFT_32 = (1 << 16) * (1 << 16),
+    SHIFT_RIGHT_32 = 1 / SHIFT_LEFT_32,
+    POW_2_63 = Math.pow(2, 63);
+
+Pbf.prototype = {
+
+    destroy: function() {
+        this.buf = null;
+    },
+
+    // === READING =================================================================
+
+    readFields: function(readField, result, end) {
+        end = end || this.length;
+
+        while (this.pos < end) {
+            var val = this.readVarint(),
+                tag = val >> 3,
+                startPos = this.pos;
+
+            readField(tag, result, this);
+
+            if (this.pos === startPos) this.skip(val);
+        }
+        return result;
+    },
+
+    readMessage: function(readField, result) {
+        return this.readFields(readField, result, this.readVarint() + this.pos);
+    },
+
+    readFixed32: function() {
+        var val = this.buf.readUInt32LE(this.pos);
+        this.pos += 4;
+        return val;
+    },
+
+    readSFixed32: function() {
+        var val = this.buf.readInt32LE(this.pos);
+        this.pos += 4;
+        return val;
+    },
+
+    // 64-bit int handling is based on github.com/dpw/node-buffer-more-ints (MIT-licensed)
+
+    readFixed64: function() {
+        var val = this.buf.readUInt32LE(this.pos) + this.buf.readUInt32LE(this.pos + 4) * SHIFT_LEFT_32;
+        this.pos += 8;
+        return val;
+    },
+
+    readSFixed64: function() {
+        var val = this.buf.readUInt32LE(this.pos) + this.buf.readInt32LE(this.pos + 4) * SHIFT_LEFT_32;
+        this.pos += 8;
+        return val;
+    },
+
+    readFloat: function() {
+        var val = this.buf.readFloatLE(this.pos);
+        this.pos += 4;
+        return val;
+    },
+
+    readDouble: function() {
+        var val = this.buf.readDoubleLE(this.pos);
+        this.pos += 8;
+        return val;
+    },
+
+    readVarint: function() {
+        var buf = this.buf,
+            val, b, b0, b1, b2, b3;
+
+        b0 = buf[this.pos++]; if (b0 < 0x80) return b0;                 b0 = b0 & 0x7f;
+        b1 = buf[this.pos++]; if (b1 < 0x80) return b0 | b1 << 7;       b1 = (b1 & 0x7f) << 7;
+        b2 = buf[this.pos++]; if (b2 < 0x80) return b0 | b1 | b2 << 14; b2 = (b2 & 0x7f) << 14;
+        b3 = buf[this.pos++]; if (b3 < 0x80) return b0 | b1 | b2 | b3 << 21;
+
+        val = b0 | b1 | b2 | (b3 & 0x7f) << 21;
+
+        b = buf[this.pos++]; val += (b & 0x7f) * 0x10000000;         if (b < 0x80) return val;
+        b = buf[this.pos++]; val += (b & 0x7f) * 0x800000000;        if (b < 0x80) return val;
+        b = buf[this.pos++]; val += (b & 0x7f) * 0x40000000000;      if (b < 0x80) return val;
+        b = buf[this.pos++]; val += (b & 0x7f) * 0x2000000000000;    if (b < 0x80) return val;
+        b = buf[this.pos++]; val += (b & 0x7f) * 0x100000000000000;  if (b < 0x80) return val;
+        b = buf[this.pos++]; val += (b & 0x7f) * 0x8000000000000000; if (b < 0x80) return val;
+
+        throw new Error('Expected varint not more than 10 bytes');
+    },
+
+    readVarint64: function() {
+        var startPos = this.pos,
+            val = this.readVarint();
+
+        if (val < POW_2_63) return val;
+
+        var pos = this.pos - 2;
+        while (this.buf[pos] === 0xff) pos--;
+        if (pos < startPos) pos = startPos;
+
+        val = 0;
+        for (var i = 0; i < pos - startPos + 1; i++) {
+            var b = ~this.buf[startPos + i] & 0x7f;
+            val += i < 4 ? b << i * 7 : b * Math.pow(2, i * 7);
+        }
+
+        return -val - 1;
+    },
+
+    readSVarint: function() {
+        var num = this.readVarint();
+        return num % 2 === 1 ? (num + 1) / -2 : num / 2; // zigzag encoding
+    },
+
+    readBoolean: function() {
+        return Boolean(this.readVarint());
+    },
+
+    readString: function() {
+        var end = this.readVarint() + this.pos,
+            str = this.buf.toString('utf8', this.pos, end);
+        this.pos = end;
+        return str;
+    },
+
+    readBytes: function() {
+        var end = this.readVarint() + this.pos,
+            buffer = this.buf.slice(this.pos, end);
+        this.pos = end;
+        return buffer;
+    },
+
+    // verbose for performance reasons; doesn't affect gzipped size
+
+    readPackedVarint: function() {
+        var end = this.readVarint() + this.pos, arr = [];
+        while (this.pos < end) arr.push(this.readVarint());
+        return arr;
+    },
+    readPackedSVarint: function() {
+        var end = this.readVarint() + this.pos, arr = [];
+        while (this.pos < end) arr.push(this.readSVarint());
+        return arr;
+    },
+    readPackedBoolean: function() {
+        var end = this.readVarint() + this.pos, arr = [];
+        while (this.pos < end) arr.push(this.readBoolean());
+        return arr;
+    },
+    readPackedFloat: function() {
+        var end = this.readVarint() + this.pos, arr = [];
+        while (this.pos < end) arr.push(this.readFloat());
+        return arr;
+    },
+    readPackedDouble: function() {
+        var end = this.readVarint() + this.pos, arr = [];
+        while (this.pos < end) arr.push(this.readDouble());
+        return arr;
+    },
+    readPackedFixed32: function() {
+        var end = this.readVarint() + this.pos, arr = [];
+        while (this.pos < end) arr.push(this.readFixed32());
+        return arr;
+    },
+    readPackedSFixed32: function() {
+        var end = this.readVarint() + this.pos, arr = [];
+        while (this.pos < end) arr.push(this.readSFixed32());
+        return arr;
+    },
+    readPackedFixed64: function() {
+        var end = this.readVarint() + this.pos, arr = [];
+        while (this.pos < end) arr.push(this.readFixed64());
+        return arr;
+    },
+    readPackedSFixed64: function() {
+        var end = this.readVarint() + this.pos, arr = [];
+        while (this.pos < end) arr.push(this.readSFixed64());
+        return arr;
+    },
+
+    skip: function(val) {
+        var type = val & 0x7;
+        if (type === Pbf.Varint) while (this.buf[this.pos++] > 0x7f) {}
+        else if (type === Pbf.Bytes) this.pos = this.readVarint() + this.pos;
+        else if (type === Pbf.Fixed32) this.pos += 4;
+        else if (type === Pbf.Fixed64) this.pos += 8;
+        else throw new Error('Unimplemented type: ' + type);
+    },
+
+    // === WRITING =================================================================
+
+    writeTag: function(tag, type) {
+        this.writeVarint((tag << 3) | type);
+    },
+
+    realloc: function(min) {
+        var length = this.length || 16;
+
+        while (length < this.pos + min) length *= 2;
+
+        if (length !== this.length) {
+            var buf = new Buffer(length);
+            this.buf.copy(buf);
+            this.buf = buf;
+            this.length = length;
+        }
+    },
+
+    finish: function() {
+        this.length = this.pos;
+        this.pos = 0;
+        return this.buf.slice(0, this.length);
+    },
+
+    writeFixed32: function(val) {
+        this.realloc(4);
+        this.buf.writeUInt32LE(val, this.pos);
+        this.pos += 4;
+    },
+
+    writeSFixed32: function(val) {
+        this.realloc(4);
+        this.buf.writeInt32LE(val, this.pos);
+        this.pos += 4;
+    },
+
+    writeFixed64: function(val) {
+        this.realloc(8);
+        this.buf.writeInt32LE(val & -1, this.pos);
+        this.buf.writeUInt32LE(Math.floor(val * SHIFT_RIGHT_32), this.pos + 4);
+        this.pos += 8;
+    },
+
+    writeSFixed64: function(val) {
+        this.realloc(8);
+        this.buf.writeInt32LE(val & -1, this.pos);
+        this.buf.writeInt32LE(Math.floor(val * SHIFT_RIGHT_32), this.pos + 4);
+        this.pos += 8;
+    },
+
+    writeVarint: function(val) {
+        val = +val;
+
+        if (val <= 0x7f) {
+            this.realloc(1);
+            this.buf[this.pos++] = val;
+
+        } else if (val <= 0x3fff) {
+            this.realloc(2);
+            this.buf[this.pos++] = ((val >>> 0) & 0x7f) | 0x80;
+            this.buf[this.pos++] = ((val >>> 7) & 0x7f);
+
+        } else if (val <= 0x1fffff) {
+            this.realloc(3);
+            this.buf[this.pos++] = ((val >>> 0) & 0x7f) | 0x80;
+            this.buf[this.pos++] = ((val >>> 7) & 0x7f) | 0x80;
+            this.buf[this.pos++] = ((val >>> 14) & 0x7f);
+
+        } else if (val <= 0xfffffff) {
+            this.realloc(4);
+            this.buf[this.pos++] = ((val >>> 0) & 0x7f) | 0x80;
+            this.buf[this.pos++] = ((val >>> 7) & 0x7f) | 0x80;
+            this.buf[this.pos++] = ((val >>> 14) & 0x7f) | 0x80;
+            this.buf[this.pos++] = ((val >>> 21) & 0x7f);
+
+        } else {
+            var pos = this.pos;
+            while (val >= 0x80) {
+                this.realloc(1);
+                this.buf[this.pos++] = (val & 0xff) | 0x80;
+                val /= 0x80;
+            }
+            this.realloc(1);
+            this.buf[this.pos++] = val | 0;
+            if (this.pos - pos > 10) throw new Error('Given varint doesn\'t fit into 10 bytes');
+        }
+    },
+
+    writeSVarint: function(val) {
+        this.writeVarint(val < 0 ? -val * 2 - 1 : val * 2);
+    },
+
+    writeBoolean: function(val) {
+        this.writeVarint(Boolean(val));
+    },
+
+    writeString: function(str) {
+        str = String(str);
+        var bytes = Buffer.byteLength(str);
+        this.writeVarint(bytes);
+        this.realloc(bytes);
+        this.buf.write(str, this.pos);
+        this.pos += bytes;
+    },
+
+    writeFloat: function(val) {
+        this.realloc(4);
+        this.buf.writeFloatLE(val, this.pos);
+        this.pos += 4;
+    },
+
+    writeDouble: function(val) {
+        this.realloc(8);
+        this.buf.writeDoubleLE(val, this.pos);
+        this.pos += 8;
+    },
+
+    writeBytes: function(buffer) {
+        var len = buffer.length;
+        this.writeVarint(len);
+        this.realloc(len);
+        for (var i = 0; i < len; i++) this.buf[this.pos++] = buffer[i];
+    },
+
+    writeRawMessage: function(fn, obj) {
+        this.pos++; // reserve 1 byte for short message length
+
+        // write the message directly to the buffer and see how much was written
+        var startPos = this.pos;
+        fn(obj, this);
+        var len = this.pos - startPos;
+
+        var varintLen =
+            len <= 0x7f ? 1 :
+            len <= 0x3fff ? 2 :
+            len <= 0x1fffff ? 3 :
+            len <= 0xfffffff ? 4 : Math.ceil(Math.log(len) / (Math.LN2 * 7));
+
+        // if 1 byte isn't enough for encoding message length, shift the data to the right
+        if (varintLen > 1) {
+            this.realloc(varintLen - 1);
+            for (var i = this.pos - 1; i >= startPos; i--) this.buf[i + varintLen - 1] = this.buf[i];
+        }
+
+        // finally, write the message length in the reserved place and restore the position
+        this.pos = startPos - 1;
+        this.writeVarint(len);
+        this.pos += len;
+    },
+
+    writeMessage: function(tag, fn, obj) {
+        this.writeTag(tag, Pbf.Bytes);
+        this.writeRawMessage(fn, obj);
+    },
+
+    writePackedVarint:   function(tag, arr) { this.writeMessage(tag, writePackedVarint, arr);   },
+    writePackedSVarint:  function(tag, arr) { this.writeMessage(tag, writePackedSVarint, arr);  },
+    writePackedBoolean:  function(tag, arr) { this.writeMessage(tag, writePackedBoolean, arr);  },
+    writePackedFloat:    function(tag, arr) { this.writeMessage(tag, writePackedFloat, arr);    },
+    writePackedDouble:   function(tag, arr) { this.writeMessage(tag, writePackedDouble, arr);   },
+    writePackedFixed32:  function(tag, arr) { this.writeMessage(tag, writePackedFixed32, arr);  },
+    writePackedSFixed32: function(tag, arr) { this.writeMessage(tag, writePackedSFixed32, arr); },
+    writePackedFixed64:  function(tag, arr) { this.writeMessage(tag, writePackedFixed64, arr);  },
+    writePackedSFixed64: function(tag, arr) { this.writeMessage(tag, writePackedSFixed64, arr); },
+
+    writeBytesField: function(tag, buffer) {
+        this.writeTag(tag, Pbf.Bytes);
+        this.writeBytes(buffer);
+    },
+    writeFixed32Field: function(tag, val) {
+        this.writeTag(tag, Pbf.Fixed32);
+        this.writeFixed32(val);
+    },
+    writeSFixed32Field: function(tag, val) {
+        this.writeTag(tag, Pbf.Fixed32);
+        this.writeSFixed32(val);
+    },
+    writeFixed64Field: function(tag, val) {
+        this.writeTag(tag, Pbf.Fixed64);
+        this.writeFixed64(val);
+    },
+    writeSFixed64Field: function(tag, val) {
+        this.writeTag(tag, Pbf.Fixed64);
+        this.writeSFixed64(val);
+    },
+    writeVarintField: function(tag, val) {
+        this.writeTag(tag, Pbf.Varint);
+        this.writeVarint(val);
+    },
+    writeSVarintField: function(tag, val) {
+        this.writeTag(tag, Pbf.Varint);
+        this.writeSVarint(val);
+    },
+    writeStringField: function(tag, str) {
+        this.writeTag(tag, Pbf.Bytes);
+        this.writeString(str);
+    },
+    writeFloatField: function(tag, val) {
+        this.writeTag(tag, Pbf.Fixed32);
+        this.writeFloat(val);
+    },
+    writeDoubleField: function(tag, val) {
+        this.writeTag(tag, Pbf.Fixed64);
+        this.writeDouble(val);
+    },
+    writeBooleanField: function(tag, val) {
+        this.writeVarintField(tag, Boolean(val));
+    }
+};
+
+function writePackedVarint(arr, pbf)   { for (var i = 0; i < arr.length; i++) pbf.writeVarint(arr[i]);   }
+function writePackedSVarint(arr, pbf)  { for (var i = 0; i < arr.length; i++) pbf.writeSVarint(arr[i]);  }
+function writePackedFloat(arr, pbf)    { for (var i = 0; i < arr.length; i++) pbf.writeFloat(arr[i]);    }
+function writePackedDouble(arr, pbf)   { for (var i = 0; i < arr.length; i++) pbf.writeDouble(arr[i]);   }
+function writePackedBoolean(arr, pbf)  { for (var i = 0; i < arr.length; i++) pbf.writeBoolean(arr[i]);  }
+function writePackedFixed32(arr, pbf)  { for (var i = 0; i < arr.length; i++) pbf.writeFixed32(arr[i]);  }
+function writePackedSFixed32(arr, pbf) { for (var i = 0; i < arr.length; i++) pbf.writeSFixed32(arr[i]); }
+function writePackedFixed64(arr, pbf)  { for (var i = 0; i < arr.length; i++) pbf.writeFixed64(arr[i]);  }
+function writePackedSFixed64(arr, pbf) { for (var i = 0; i < arr.length; i++) pbf.writeSFixed64(arr[i]); }
+
+}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{"./buffer":2}],4:[function(require,module,exports){
+exports.read = function (buffer, offset, isLE, mLen, nBytes) {
+  var e, m
+  var eLen = nBytes * 8 - mLen - 1
+  var eMax = (1 << eLen) - 1
+  var eBias = eMax >> 1
+  var nBits = -7
+  var i = isLE ? (nBytes - 1) : 0
+  var d = isLE ? -1 : 1
+  var s = buffer[offset + i]
+
+  i += d
+
+  e = s & ((1 << (-nBits)) - 1)
+  s >>= (-nBits)
+  nBits += eLen
+  for (; nBits > 0; e = e * 256 + buffer[offset + i], i += d, nBits -= 8) {}
+
+  m = e & ((1 << (-nBits)) - 1)
+  e >>= (-nBits)
+  nBits += mLen
+  for (; nBits > 0; m = m * 256 + buffer[offset + i], i += d, nBits -= 8) {}
+
+  if (e === 0) {
+    e = 1 - eBias
+  } else if (e === eMax) {
+    return m ? NaN : ((s ? -1 : 1) * Infinity)
+  } else {
+    m = m + Math.pow(2, mLen)
+    e = e - eBias
+  }
+  return (s ? -1 : 1) * m * Math.pow(2, e - mLen)
+}
+
+exports.write = function (buffer, value, offset, isLE, mLen, nBytes) {
+  var e, m, c
+  var eLen = nBytes * 8 - mLen - 1
+  var eMax = (1 << eLen) - 1
+  var eBias = eMax >> 1
+  var rt = (mLen === 23 ? Math.pow(2, -24) - Math.pow(2, -77) : 0)
+  var i = isLE ? 0 : (nBytes - 1)
+  var d = isLE ? 1 : -1
+  var s = value < 0 || (value === 0 && 1 / value < 0) ? 1 : 0
+
+  value = Math.abs(value)
+
+  if (isNaN(value) || value === Infinity) {
+    m = isNaN(value) ? 1 : 0
+    e = eMax
+  } else {
+    e = Math.floor(Math.log(value) / Math.LN2)
+    if (value * (c = Math.pow(2, -e)) < 1) {
+      e--
+      c *= 2
+    }
+    if (e + eBias >= 1) {
+      value += rt / c
+    } else {
+      value += rt * Math.pow(2, 1 - eBias)
+    }
+    if (value * c >= 2) {
+      e++
+      c /= 2
+    }
+
+    if (e + eBias >= eMax) {
+      m = 0
+      e = eMax
+    } else if (e + eBias >= 1) {
+      m = (value * c - 1) * Math.pow(2, mLen)
+      e = e + eBias
+    } else {
+      m = value * Math.pow(2, eBias - 1) * Math.pow(2, mLen)
+      e = 0
+    }
+  }
+
+  for (; mLen >= 8; buffer[offset + i] = m & 0xff, i += d, m /= 256, mLen -= 8) {}
+
+  e = (e << mLen) | m
+  eLen += mLen
+  for (; eLen > 0; buffer[offset + i] = e & 0xff, i += d, e /= 256, eLen -= 8) {}
+
+  buffer[offset + i - d] |= s * 128
+}
+
+},{}],5:[function(require,module,exports){
 /*
  (c) 2015, Vladimir Agafonkin
  RBush, a JavaScript library for high-performance 2D spatial indexing of points and rectangles.
@@ -653,10 +1330,10 @@ else window.rbush = rbush;
 
 })();
 
-},{}],3:[function(require,module,exports){
+},{}],6:[function(require,module,exports){
 !function() {
   var topojson = {
-    version: "1.6.19",
+    version: "1.6.20",
     mesh: function(topology) { return object(topology, meshArcs.apply(this, arguments)); },
     meshArcs: meshArcs,
     merge: function(topology) { return object(topology, mergeArcs.apply(this, arguments)); },
@@ -836,7 +1513,7 @@ else window.rbush = rbush;
     return {
       type: "MultiPolygon",
       arcs: components.map(function(polygons) {
-        var arcs = [];
+        var arcs = [], n;
 
         // Extract the exterior (unique) arcs.
         polygons.forEach(function(polygon) {
@@ -1070,7 +1747,7 @@ else window.rbush = rbush;
     }
 
     return topology;
-  };
+  }
 
   function cartesianRingArea(ring) {
     var i = -1,
@@ -1085,7 +1762,7 @@ else window.rbush = rbush;
       area += a[0] * b[1] - a[1] * b[0];
     }
 
-    return area * .5;
+    return area / 2;
   }
 
   function cartesianTriangleArea(triangle) {
@@ -1189,7 +1866,483 @@ else window.rbush = rbush;
   else this.topojson = topojson;
 }();
 
-},{}],4:[function(require,module,exports){
+},{}],7:[function(require,module,exports){
+module.exports.VectorTile = require('./lib/vectortile.js');
+module.exports.VectorTileFeature = require('./lib/vectortilefeature.js');
+module.exports.VectorTileLayer = require('./lib/vectortilelayer.js');
+
+},{"./lib/vectortile.js":8,"./lib/vectortilefeature.js":9,"./lib/vectortilelayer.js":10}],8:[function(require,module,exports){
+'use strict';
+
+var VectorTileLayer = require('./vectortilelayer');
+
+module.exports = VectorTile;
+
+function VectorTile(buffer, end) {
+
+    this.layers = {};
+    this._buffer = buffer;
+
+    end = end || buffer.length;
+
+    while (buffer.pos < end) {
+        var val = buffer.readVarint(),
+            tag = val >> 3;
+
+        if (tag == 3) {
+            var layer = this.readLayer();
+            if (layer.length) this.layers[layer.name] = layer;
+        } else {
+            buffer.skip(val);
+        }
+    }
+}
+
+VectorTile.prototype.readLayer = function() {
+    var buffer = this._buffer,
+        bytes = buffer.readVarint(),
+        end = buffer.pos + bytes,
+        layer = new VectorTileLayer(buffer, end);
+
+    buffer.pos = end;
+
+    return layer;
+};
+
+// Returns a dictionary of layers as individual GeoJSON feature collections, keyed by layer name
+VectorTile.prototype.toGeoJSON = function () {
+    var json = {};
+    var layerNames = Object.keys(this.layers);
+
+    for (var n=0; n < layerNames.length; n++) {
+        json[layerNames[n]] = this.layers[layerNames[n]].toGeoJSON();
+    }
+
+    return json;
+};
+
+},{"./vectortilelayer":10}],9:[function(require,module,exports){
+'use strict';
+
+var Point = require('point-geometry');
+
+module.exports = VectorTileFeature;
+
+function VectorTileFeature(buffer, end, extent, keys, values) {
+
+    this.properties = {};
+
+    // Public
+    this.extent = extent;
+    this.type = 0;
+
+    // Private
+    this._buffer = buffer;
+    this._geometry = -1;
+    this._keys = keys;
+
+    end = end || buffer.length;
+
+    while (buffer.pos < end) {
+        var val = buffer.readVarint(),
+            tag = val >> 3;
+
+        if (tag == 1) {
+            this._id = buffer.readVarint();
+
+        } else if (tag == 2) {
+            var tagEnd = buffer.pos + buffer.readVarint();
+
+            while (buffer.pos < tagEnd) {
+                var key = keys[buffer.readVarint()];
+                var value = values[buffer.readVarint()];
+                this.properties[key] = value;
+            }
+
+        } else if (tag == 3) {
+            this.type = buffer.readVarint();
+
+        } else if (tag == 4) {
+            this._geometry = buffer.pos;
+            buffer.skip(val);
+
+        } else {
+            buffer.skip(val);
+        }
+    }
+}
+
+VectorTileFeature.types = ['Unknown', 'Point', 'LineString', 'Polygon'];
+
+VectorTileFeature.prototype.loadGeometry = function() {
+    var buffer = this._buffer;
+    buffer.pos = this._geometry;
+
+    var bytes = buffer.readVarint(),
+        end = buffer.pos + bytes,
+        cmd = 1,
+        length = 0,
+        x = 0,
+        y = 0,
+        lines = [],
+        line;
+
+    while (buffer.pos < end) {
+        if (!length) {
+            var cmd_length = buffer.readVarint();
+            cmd = cmd_length & 0x7;
+            length = cmd_length >> 3;
+        }
+
+        length--;
+
+        if (cmd === 1 || cmd === 2) {
+            x += buffer.readSVarint();
+            y += buffer.readSVarint();
+
+            if (cmd === 1) {
+                // moveTo
+                if (line) {
+                    lines.push(line);
+                }
+                line = [];
+            }
+
+            line.push(new Point(x, y));
+        } else if (cmd === 7) {
+            // closePolygon
+            line.push(line[0].clone());
+        } else {
+            throw new Error('unknown command ' + cmd);
+        }
+    }
+
+    if (line) lines.push(line);
+
+    return lines;
+};
+
+VectorTileFeature.prototype.bbox = function() {
+    var buffer = this._buffer;
+    buffer.pos = this._geometry;
+
+    var bytes = buffer.readVarint(),
+        end = buffer.pos + bytes,
+
+        cmd = 1,
+        length = 0,
+        x = 0,
+        y = 0,
+        x1 = Infinity,
+        x2 = -Infinity,
+        y1 = Infinity,
+        y2 = -Infinity;
+
+    while (buffer.pos < end) {
+        if (!length) {
+            var cmd_length = buffer.readVarint();
+            cmd = cmd_length & 0x7;
+            length = cmd_length >> 3;
+        }
+
+        length--;
+
+        if (cmd === 1 || cmd === 2) {
+            x += buffer.readSVarint();
+            y += buffer.readSVarint();
+            if (x < x1) x1 = x;
+            if (x > x2) x2 = x;
+            if (y < y1) y1 = y;
+            if (y > y2) y2 = y;
+
+        } else if (cmd !== 7) {
+            throw new Error('unknown command ' + cmd);
+        }
+    }
+
+    return [x1, y1, x2, y2];
+};
+
+VectorTileFeature.prototype.toGeoJSON = function () {
+    var geojson = {
+        type: 'Feature',
+        geometry: {},
+        properties: {}
+    };
+
+    for (var k=0; k < this._keys.length; k++) {
+        var key = this._keys[k];
+        geojson.properties[key] = this.properties[key];
+    }
+
+    geojson.geometry.coordinates = this.loadGeometry();
+    for (var r=0; r < geojson.geometry.coordinates.length; r++) {
+        var ring = geojson.geometry.coordinates[r];
+        for (var c=0; c < ring.length; c++) {
+            ring[c] = [
+                ring[c].x,
+                ring[c].y
+            ];
+        }
+    }
+
+    if (VectorTileFeature.types[this.type] == 'Point') {
+        geojson.geometry.type = 'Point';
+    }
+    else if (VectorTileFeature.types[this.type] == 'LineString') {
+        if (geojson.geometry.coordinates.length == 1) {
+            geojson.geometry.coordinates = geojson.geometry.coordinates[0];
+            geojson.geometry.type = 'LineString';
+        }
+        else {
+            geojson.geometry.type = 'MultiLineString';
+        }
+    }
+    else if (VectorTileFeature.types[this.type] == 'Polygon') {
+        geojson.geometry.type = 'Polygon';
+    }
+
+    return geojson;
+};
+
+},{"point-geometry":11}],10:[function(require,module,exports){
+'use strict';
+
+var VectorTileFeature = require('./vectortilefeature.js');
+
+module.exports = VectorTileLayer;
+function VectorTileLayer(buffer, end) {
+    // Public
+    this.version = 1;
+    this.name = null;
+    this.extent = 4096;
+    this.length = 0;
+
+    // Private
+    this._buffer = buffer;
+    this._keys = [];
+    this._values = [];
+    this._features = [];
+
+    var val, tag;
+
+    end = end || buffer.length;
+
+    while (buffer.pos < end) {
+        val = buffer.readVarint();
+        tag = val >> 3;
+
+        if (tag === 15) {
+            this.version = buffer.readVarint();
+        } else if (tag === 1) {
+            this.name = buffer.readString();
+        } else if (tag === 5) {
+            this.extent = buffer.readVarint();
+        } else if (tag === 2) {
+            this.length++;
+            this._features.push(buffer.pos);
+            buffer.skip(val);
+
+        } else if (tag === 3) {
+            this._keys.push(buffer.readString());
+        } else if (tag === 4) {
+            this._values.push(this.readFeatureValue());
+        } else {
+            buffer.skip(val);
+        }
+    }
+}
+
+VectorTileLayer.prototype.readFeatureValue = function() {
+    var buffer = this._buffer,
+        value = null,
+        bytes = buffer.readVarint(),
+        end = buffer.pos + bytes,
+        val, tag;
+
+    while (buffer.pos < end) {
+        val = buffer.readVarint();
+        tag = val >> 3;
+
+        if (tag == 1) {
+            value = buffer.readString();
+        } else if (tag == 2) {
+            throw new Error('read float');
+        } else if (tag == 3) {
+            value = buffer.readDouble();
+        } else if (tag == 4) {
+            value = buffer.readVarint();
+        } else if (tag == 5) {
+            throw new Error('read uint');
+        } else if (tag == 6) {
+            value = buffer.readSVarint();
+        } else if (tag == 7) {
+            value = Boolean(buffer.readVarint());
+        } else {
+            buffer.skip(val);
+        }
+    }
+
+    return value;
+};
+
+// return feature `i` from this layer as a `VectorTileFeature`
+VectorTileLayer.prototype.feature = function(i) {
+    if (i < 0 || i >= this._features.length) throw new Error('feature index out of bounds');
+
+    this._buffer.pos = this._features[i];
+    var end = this._buffer.readVarint() + this._buffer.pos;
+
+    return new VectorTileFeature(this._buffer, end, this.extent, this._keys, this._values);
+};
+
+VectorTileLayer.prototype.toGeoJSON = function () {
+    var geojson = {
+        type: 'FeatureCollection',
+        features: []
+    };
+
+    for (var f=0; f < this.length; f++) {
+        geojson.features.push(this.feature(f).toGeoJSON());
+    }
+
+    return geojson;
+};
+
+},{"./vectortilefeature.js":9}],11:[function(require,module,exports){
+'use strict';
+
+module.exports = Point;
+
+function Point(x, y) {
+    this.x = x;
+    this.y = y;
+}
+
+Point.prototype = {
+    clone: function() { return new Point(this.x, this.y); },
+
+    add:     function(p) { return this.clone()._add(p);     },
+    sub:     function(p) { return this.clone()._sub(p);     },
+    mult:    function(k) { return this.clone()._mult(k);    },
+    div:     function(k) { return this.clone()._div(k);     },
+    rotate:  function(a) { return this.clone()._rotate(a);  },
+    matMult: function(m) { return this.clone()._matMult(m); },
+    unit:    function() { return this.clone()._unit(); },
+    perp:    function() { return this.clone()._perp(); },
+    round:   function() { return this.clone()._round(); },
+
+    mag: function() {
+        return Math.sqrt(this.x * this.x + this.y * this.y);
+    },
+
+    equals: function(p) {
+        return this.x === p.x &&
+               this.y === p.y;
+    },
+
+    dist: function(p) {
+        return Math.sqrt(this.distSqr(p));
+    },
+
+    distSqr: function(p) {
+        var dx = p.x - this.x,
+            dy = p.y - this.y;
+        return dx * dx + dy * dy;
+    },
+
+    angle: function() {
+        return Math.atan2(this.y, this.x);
+    },
+
+    angleTo: function(b) {
+        return Math.atan2(this.y - b.y, this.x - b.x);
+    },
+
+    angleWith: function(b) {
+        return this.angleWithSep(b.x, b.y);
+    },
+
+    // Find the angle of the two vectors, solving the formula for the cross product a x b = |a||b|sin(θ) for θ.
+    angleWithSep: function(x, y) {
+        return Math.atan2(
+            this.x * y - this.y * x,
+            this.x * x + this.y * y);
+    },
+
+    _matMult: function(m) {
+        var x = m[0] * this.x + m[1] * this.y,
+            y = m[2] * this.x + m[3] * this.y;
+        this.x = x;
+        this.y = y;
+        return this;
+    },
+
+    _add: function(p) {
+        this.x += p.x;
+        this.y += p.y;
+        return this;
+    },
+
+    _sub: function(p) {
+        this.x -= p.x;
+        this.y -= p.y;
+        return this;
+    },
+
+    _mult: function(k) {
+        this.x *= k;
+        this.y *= k;
+        return this;
+    },
+
+    _div: function(k) {
+        this.x /= k;
+        this.y /= k;
+        return this;
+    },
+
+    _unit: function() {
+        this._div(this.mag());
+        return this;
+    },
+
+    _perp: function() {
+        var y = this.y;
+        this.y = this.x;
+        this.x = -y;
+        return this;
+    },
+
+    _rotate: function(angle) {
+        var cos = Math.cos(angle),
+            sin = Math.sin(angle),
+            x = cos * this.x - sin * this.y,
+            y = sin * this.x + cos * this.y;
+        this.x = x;
+        this.y = y;
+        return this;
+    },
+
+    _round: function() {
+        this.x = Math.round(this.x);
+        this.y = Math.round(this.y);
+        return this;
+    }
+};
+
+// constructs Point from an array if necessary
+Point.convert = function (a) {
+    if (a instanceof Point) {
+        return a;
+    }
+    if (Array.isArray(a)) {
+        return new Point(a[0], a[1]);
+    }
+    return a;
+};
+
+},{}],12:[function(require,module,exports){
 (function(prototype) {
 
   var pixelRatio = (function(context) {
@@ -1314,7 +2467,7 @@ else window.rbush = rbush;
     };
   })(prototype.strokeText);
 })(CanvasRenderingContext2D.prototype);
-},{}],5:[function(require,module,exports){
+},{}],13:[function(require,module,exports){
 (function(prototype) {
   prototype.getContext = (function(_super) {
     return function(type) {
@@ -1350,16 +2503,37 @@ else window.rbush = rbush;
     };
   })(prototype.getContext);
 })(HTMLCanvasElement.prototype);
-},{}],6:[function(require,module,exports){
+},{}],14:[function(require,module,exports){
 'use strict';
+
+/* globals L, d3, turf, performance */
 
 require('./HTMLCanvasPolyfill.js');
 require('./CanvasRenderingContextPolyfill.js');
 
 var RenderingInterface = require('./renderingInterface');
 var topojson = require('topojson');
+var Protobuf = require('pbf');
+var VectorTile = require('vector-tile').VectorTile;
+var VectorTileLayer = require('vector-tile').VectorTileLayer;
 var rbush = require('rbush');
 var ensureArray = require('ensure-array');
+
+if (!VectorTileLayer.prototype.toGeoJSON) {
+  VectorTileLayer.prototype.toGeoJSON = function () {
+    var geojson = {
+      type: 'FeatureCollection',
+      features: []
+    };
+
+    for (var f = 0; f < this.length; f++) {
+      geojson.features.push(this.feature(f).toGeoJSON());
+    }
+
+    return geojson;
+  };
+}
+
 
 module.exports = L.TileLayer.Canvas.extend({
   options: {
@@ -1376,9 +2550,9 @@ module.exports = L.TileLayer.Canvas.extend({
 
     this.featureId = options.featureId || function (f) {
         return f.properties.id;
-      }
+      };
 
-    if (typeof(Number.prototype.toRad) === "undefined") {
+    if (typeof(Number.prototype.toRad) === 'undefined') {
       Number.prototype.toRad = function () {
         return this * Math.PI / 180;
       };
@@ -1386,7 +2560,7 @@ module.exports = L.TileLayer.Canvas.extend({
 
     this.setUrl(url);
 
-    this.on("tileunload", function (d) {
+    this.on('tileunload', function (d) {
 
       // Remove feature->tile mapping from cache
       var tileKey = d.tile._tilePoint.x + ':' + d.tile._tilePoint.y;
@@ -1456,9 +2630,10 @@ module.exports = L.TileLayer.Canvas.extend({
 
     var self = this;
     var startTime = performance.now();
-    var key = this._getTileKey(e.latlng, map.getZoom());
+    var key = this._getTileKey(e.latlng, this._map.getZoom());
     var tile = this._tiles[key];
     var pixelRatio = this._getPixelRatio(tile);
+    var elements;
     var i;
 
     if (!tile) {
@@ -1475,7 +2650,7 @@ module.exports = L.TileLayer.Canvas.extend({
       // Build spatial index using bounds of each feature in tile
       tile._spatialIndex = rbush(9);
 
-      var elements = [];
+      elements = [];
 
       layerKeys.forEach(function (layer) {
         for (i = tile._layers[layer].features.length - 1; i >= 0; i--) {
@@ -1499,16 +2674,16 @@ module.exports = L.TileLayer.Canvas.extend({
       // Bulk load elements into spatial index
       tile._spatialIndex.load(elements);
     }
-
+    // jshint -W106
     var x = e.layerPoint.x - tile._leaflet_pos.x;
     var y = e.layerPoint.y - tile._leaflet_pos.y;
     x *= pixelRatio;
     y *= pixelRatio;
 
-    var elements = tile._spatialIndex.search([x, y, x, y]);
+    elements = tile._spatialIndex.search([x, y, x, y]);
     var features = [];
 
-    for (var i = elements.length - 1; i >= 0; i--) {
+    for (i = elements.length - 1; i >= 0; i--) {
 
       var feature = elements[i][4];
 
@@ -1537,6 +2712,7 @@ module.exports = L.TileLayer.Canvas.extend({
   },
 
   _getTileKey: function (latlng, zoom) {
+    // jshint -W016
     var xtile = parseInt(Math.floor((latlng.lng + 180) / 360 * (1 << zoom)));
     var ytile = parseInt(Math.floor((1 - Math.log(Math.tan(latlng.lat.toRad()) + 1 / Math.cos(latlng.lat.toRad())) / Math.PI) / 2 * (1 << zoom)));
     return [xtile, ytile].join(':');
@@ -1644,7 +2820,7 @@ module.exports = L.TileLayer.Canvas.extend({
     }
   },
   render: function (layerName, fn) {
-    if (typeof fn == 'function') {
+    if (typeof fn === 'function') {
       this._renderers.push({
         layer: layerName,
         run: fn
@@ -1673,14 +2849,14 @@ module.exports = L.TileLayer.Canvas.extend({
       this._renderers.forEach(function (renderer) {
         if (!data[renderer.layer]) return;
 
-        if (typeof paths[renderer.layer] == 'undefined') {
+        if (typeof paths[renderer.layer] === 'undefined') {
           paths[renderer.layer] = d3.geo.path()
             .projection(self.clippedProjector(tilePoint, renderer.layer, canvasSize, pixelRatio))
             .context(context);
         }
 
         renderer.run(context, data[renderer.layer].features, tilePoint, function (features) {
-          if (typeof features == 'object' && !Array.isArray(features)) {
+          if (typeof features === 'object' && !Array.isArray(features)) {
             features = [features];
           }
 
@@ -1750,6 +2926,7 @@ module.exports = L.TileLayer.Canvas.extend({
       offScreenCanvas.height = self.options.tileSize;
 
       self.drawData(offScreenCanvas, tilePoint, canvas._layers, function (err) {
+        // jshint -W030
         animationFrame && window.cancelAnimationFrame(animationFrame);
         animationFrame = window.requestAnimationFrame(function () {
           canvas.getContext('2d').drawImage(offScreenCanvas, 0, 0);
@@ -1813,7 +2990,7 @@ module.exports = L.TileLayer.Canvas.extend({
   },
 
   // Return active layer names for tile
-  _activeLayers: function(tile) {
+  _activeLayers: function (tile) {
     if (!this.options.layers) {
       return Object.keys(tile._layers);
     }
@@ -1828,7 +3005,7 @@ module.exports = L.TileLayer.Canvas.extend({
 
     return layers;
   },
-  _getPixelRatio: function(context) {
+  _getPixelRatio: function (context) {
 
     var backingStore = context.backingStorePixelRatio ||
       context.webkitBackingStorePixelRatio ||
@@ -1880,11 +3057,11 @@ module.exports.mvt = module.exports.extend({
     return xhr.abort.bind(xhr);
   },
   parse: function (data) {
-    var tile = new VectorTile(new pbf(new Uint8Array(data)));
+    var tile = new VectorTile(new Protobuf(new Uint8Array(data)));
 
     var layers = {};
 
-    if (typeof this.layerExtents == 'undefined') {
+    if (typeof this.layerExtents === 'undefined') {
       this.layerExtents = {};
     }
 
@@ -1912,7 +3089,7 @@ module.exports.mvt = module.exports.extend({
   }
 });
 
-},{"./CanvasRenderingContextPolyfill.js":4,"./HTMLCanvasPolyfill.js":5,"./renderingInterface":7,"ensure-array":1,"rbush":2,"topojson":3}],7:[function(require,module,exports){
+},{"./CanvasRenderingContextPolyfill.js":12,"./HTMLCanvasPolyfill.js":13,"./renderingInterface":15,"ensure-array":1,"pbf":3,"rbush":5,"topojson":6,"vector-tile":7}],15:[function(require,module,exports){
 var RenderingInterface = function(layer, name){
   this.layer = layer;
   this.layerName = name;
@@ -2072,5 +3249,5 @@ RenderingInterface.prototype.run = function(context, features, tile, draw){
 };
 
 module.exports = RenderingInterface;
-},{}]},{},[6])(6)
+},{}]},{},[14])(14)
 });

@@ -1,5 +1,9 @@
 'use strict';
 
+/* global L, Hoverboard */
+
+// jshint -W106
+
 var map = L.map('map', {
   center: [51.5219475, -0.0685291],
   zoom: 14
@@ -31,23 +35,21 @@ var colors = {
   little_road: '#853A6C'
 };
 
-
 function buildingColor(height) {
-  return height > 200 ? "#9e0142" :
-    height > 150 ? "#d53e4f" :
-      height > 120 ? "#f46d43" :
-        height > 100 ? "#fdae61" :
-          height > 75 ? "#fee08b" :
-            height > 50 ? "#fee08b" :
-              height > 40 ? "#e6f598" :
-                height > 20 ? "#abdda4" :
-                  height > 10 ? "#66c2a5" :
-                    height > 5 ? "#3288bd" :
-                      height > 0 ? "#5e4fa2" : "#00cc00";
+  return height > 200 ? '#9e0142' :
+    height > 150 ? '#d53e4f' :
+      height > 120 ? '#f46d43' :
+        height > 100 ? '#fdae61' :
+          height > 75 ? '#fee08b' :
+            height > 50 ? '#fee08b' :
+              height > 40 ? '#e6f598' :
+                height > 20 ? '#abdda4' :
+                  height > 10 ? '#66c2a5' :
+                    height > 5 ? '#3288bd' :
+                      height > 0 ? '#5e4fa2' : '#00cc00';
 }
 
 var baseLayer = new Hoverboard.mvt(baseUrl, {
-  hidpiPolyfill: true,
   layers: ['road', 'water']
 });
 
@@ -93,8 +95,8 @@ baseLayer
 
   .render('road')
   .where('type', ['motorway', 'trunk'])
-  .stroke(1.75, 'rgba(2555, 255, 255, 0.5)')
-  .stroke(0.75, colors.big_road)
+  .stroke(3, 'rgba(2555, 255, 255, 0.5)')
+  .stroke(1, colors.big_road)
 
   .render('road')
   .whereNot('type', ['motorway', 'trunk'])
@@ -110,7 +112,6 @@ baseLayer
   .addTo(map);
 
 var buildingsLayer = new Hoverboard.mvt(buildingsUrl, {
-  hidpiPolyfill: true,
   featureId: function (feature) {
     return feature.properties.id;
   },
@@ -128,30 +129,26 @@ var buildingsLayer = new Hoverboard.mvt(buildingsUrl, {
     oldSelectedFeature = selectedFeature;
     selectedFeature = features[0];
 
-    var oldId = oldSelectedFeature && oldSelectedFeature.properties.id;
-    var newId = selectedFeature && selectedFeature.properties.id;
-
-    if (oldId !== newId) {
+    if (oldSelectedFeature !== selectedFeature) {
       layer.redrawFeatures([oldSelectedFeature, selectedFeature]);
     }
   },
 
   onmousemove: function (e, features, layer) {
 
+    var oldHoveredFeature;
+
     if (hoveredFeature && features.length === 0) {
-      var oldHoveredFeature = hoveredFeature;
+      oldHoveredFeature = hoveredFeature;
       hoveredFeature = null;
       layer.redrawFeatures(oldHoveredFeature);
       return;
     }
 
-    var oldHoveredFeature = hoveredFeature;
+    oldHoveredFeature = hoveredFeature;
     hoveredFeature = features[0];
 
-    var oldId = oldHoveredFeature? oldHoveredFeature.properties.id : null;
-    var newId = hoveredFeature? hoveredFeature.properties.id : null;
-
-    if (oldId !== newId) {
+    if (oldHoveredFeature !== hoveredFeature) {
       layer.redrawFeatures([oldHoveredFeature, hoveredFeature]);
     }
   }

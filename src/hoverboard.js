@@ -1,12 +1,33 @@
 'use strict';
 
+/* globals L, d3, turf, performance */
+
 require('./HTMLCanvasPolyfill.js');
 require('./CanvasRenderingContextPolyfill.js');
 
 var RenderingInterface = require('./renderingInterface');
 var topojson = require('topojson');
+var Protobuf = require('pbf');
+var VectorTile = require('vector-tile').VectorTile;
+var VectorTileLayer = require('vector-tile').VectorTileLayer;
 var rbush = require('rbush');
 var ensureArray = require('ensure-array');
+
+if (!VectorTileLayer.prototype.toGeoJSON) {
+  VectorTileLayer.prototype.toGeoJSON = function () {
+    var geojson = {
+      type: 'FeatureCollection',
+      features: []
+    };
+
+    for (var f = 0; f < this.length; f++) {
+      geojson.features.push(this.feature(f).toGeoJSON());
+    }
+
+    return geojson;
+  };
+}
+
 
 module.exports = L.TileLayer.Canvas.extend({
   options: {
@@ -23,9 +44,9 @@ module.exports = L.TileLayer.Canvas.extend({
 
     this.featureId = options.featureId || function (f) {
         return f.properties.id;
-      }
+      };
 
-    if (typeof(Number.prototype.toRad) === "undefined") {
+    if (typeof(Number.prototype.toRad) === 'undefined') {
       Number.prototype.toRad = function () {
         return this * Math.PI / 180;
       };
@@ -33,7 +54,7 @@ module.exports = L.TileLayer.Canvas.extend({
 
     this.setUrl(url);
 
-    this.on("tileunload", function (d) {
+    this.on('tileunload', function (d) {
 
       // Remove feature->tile mapping from cache
       var tileKey = d.tile._tilePoint.x + ':' + d.tile._tilePoint.y;
@@ -103,9 +124,10 @@ module.exports = L.TileLayer.Canvas.extend({
 
     var self = this;
     var startTime = performance.now();
-    var key = this._getTileKey(e.latlng, map.getZoom());
+    var key = this._getTileKey(e.latlng, this._map.getZoom());
     var tile = this._tiles[key];
     var pixelRatio = this._getPixelRatio(tile);
+    var elements;
     var i;
 
     if (!tile) {
@@ -122,7 +144,7 @@ module.exports = L.TileLayer.Canvas.extend({
       // Build spatial index using bounds of each feature in tile
       tile._spatialIndex = rbush(9);
 
-      var elements = [];
+      elements = [];
 
       layerKeys.forEach(function (layer) {
         for (i = tile._layers[layer].features.length - 1; i >= 0; i--) {
@@ -146,16 +168,16 @@ module.exports = L.TileLayer.Canvas.extend({
       // Bulk load elements into spatial index
       tile._spatialIndex.load(elements);
     }
-
+    // jshint -W106
     var x = e.layerPoint.x - tile._leaflet_pos.x;
     var y = e.layerPoint.y - tile._leaflet_pos.y;
     x *= pixelRatio;
     y *= pixelRatio;
 
-    var elements = tile._spatialIndex.search([x, y, x, y]);
+    elements = tile._spatialIndex.search([x, y, x, y]);
     var features = [];
 
-    for (var i = elements.length - 1; i >= 0; i--) {
+    for (i = elements.length - 1; i >= 0; i--) {
 
       var feature = elements[i][4];
 
@@ -184,6 +206,7 @@ module.exports = L.TileLayer.Canvas.extend({
   },
 
   _getTileKey: function (latlng, zoom) {
+    // jshint -W016
     var xtile = parseInt(Math.floor((latlng.lng + 180) / 360 * (1 << zoom)));
     var ytile = parseInt(Math.floor((1 - Math.log(Math.tan(latlng.lat.toRad()) + 1 / Math.cos(latlng.lat.toRad())) / Math.PI) / 2 * (1 << zoom)));
     return [xtile, ytile].join(':');
@@ -291,7 +314,7 @@ module.exports = L.TileLayer.Canvas.extend({
     }
   },
   render: function (layerName, fn) {
-    if (typeof fn == 'function') {
+    if (typeof fn === 'function') {
       this._renderers.push({
         layer: layerName,
         run: fn
@@ -320,14 +343,14 @@ module.exports = L.TileLayer.Canvas.extend({
       this._renderers.forEach(function (renderer) {
         if (!data[renderer.layer]) return;
 
-        if (typeof paths[renderer.layer] == 'undefined') {
+        if (typeof paths[renderer.layer] === 'undefined') {
           paths[renderer.layer] = d3.geo.path()
             .projection(self.clippedProjector(tilePoint, renderer.layer, canvasSize, pixelRatio))
             .context(context);
         }
 
         renderer.run(context, data[renderer.layer].features, tilePoint, function (features) {
-          if (typeof features == 'object' && !Array.isArray(features)) {
+          if (typeof features === 'object' && !Array.isArray(features)) {
             features = [features];
           }
 
@@ -397,6 +420,7 @@ module.exports = L.TileLayer.Canvas.extend({
       offScreenCanvas.height = self.options.tileSize;
 
       self.drawData(offScreenCanvas, tilePoint, canvas._layers, function (err) {
+        // jshint -W030
         animationFrame && window.cancelAnimationFrame(animationFrame);
         animationFrame = window.requestAnimationFrame(function () {
           canvas.getContext('2d').drawImage(offScreenCanvas, 0, 0);
@@ -460,7 +484,7 @@ module.exports = L.TileLayer.Canvas.extend({
   },
 
   // Return active layer names for tile
-  _activeLayers: function(tile) {
+  _activeLayers: function (tile) {
     if (!this.options.layers) {
       return Object.keys(tile._layers);
     }
@@ -475,7 +499,7 @@ module.exports = L.TileLayer.Canvas.extend({
 
     return layers;
   },
-  _getPixelRatio: function(context) {
+  _getPixelRatio: function (context) {
 
     var backingStore = context.backingStorePixelRatio ||
       context.webkitBackingStorePixelRatio ||
@@ -527,11 +551,11 @@ module.exports.mvt = module.exports.extend({
     return xhr.abort.bind(xhr);
   },
   parse: function (data) {
-    var tile = new VectorTile(new pbf(new Uint8Array(data)));
+    var tile = new VectorTile(new Protobuf(new Uint8Array(data)));
 
     var layers = {};
 
-    if (typeof this.layerExtents == 'undefined') {
+    if (typeof this.layerExtents === 'undefined') {
       this.layerExtents = {};
     }
 
