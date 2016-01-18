@@ -1830,10 +1830,6 @@ module.exports = L.TileLayer.Canvas.extend({
   },
   _getPixelRatio: function(context) {
 
-    if (!this.options.hidpiPolyfill) {
-      return 1;
-    }
-
     var backingStore = context.backingStorePixelRatio ||
       context.webkitBackingStorePixelRatio ||
       context.mozBackingStorePixelRatio ||
