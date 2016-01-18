@@ -47,7 +47,7 @@ function buildingColor(height) {
 }
 
 var baseLayer = new Hoverboard.mvt(baseUrl, {
-  hidpiPolyfill: false,
+  hidpiPolyfill: true,
   layers: ['road', 'water']
 });
 
@@ -110,7 +110,7 @@ baseLayer
   .addTo(map);
 
 var buildingsLayer = new Hoverboard.mvt(buildingsUrl, {
-  hidpiPolyfill: false,
+  hidpiPolyfill: true,
   featureId: function (feature) {
     return feature.properties.id;
   },

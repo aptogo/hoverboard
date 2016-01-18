@@ -1190,10 +1190,173 @@ else window.rbush = rbush;
 }();
 
 },{}],4:[function(require,module,exports){
+(function(prototype) {
+
+  var pixelRatio = (function(context) {
+      var backingStore = context.backingStorePixelRatio ||
+        context.webkitBackingStorePixelRatio ||
+        context.mozBackingStorePixelRatio ||
+        context.msBackingStorePixelRatio ||
+        context.oBackingStorePixelRatio ||
+        context.backingStorePixelRatio || 1;
+
+      return (window.devicePixelRatio || 1) / backingStore;
+    })(prototype),
+
+    forEach = function(obj, func) {
+      for (var p in obj) {
+        if (obj.hasOwnProperty(p)) {
+          func(obj[p], p);
+        }
+      }
+    },
+
+    ratioArgs = {
+      'fillRect': 'all',
+      'clearRect': 'all',
+      'strokeRect': 'all',
+      'moveTo': 'all',
+      'lineTo': 'all',
+      'arc': [0,1,2],
+      'arcTo': 'all',
+      'bezierCurveTo': 'all',
+      'isPointinPath': 'all',
+      'isPointinStroke': 'all',
+      'quadraticCurveTo': 'all',
+      'rect': 'all',
+      'translate': 'all',
+      'createRadialGradient': 'all',
+      'createLinearGradient': 'all'
+    };
+
+  if (pixelRatio === 1) return;
+
+  forEach(ratioArgs, function(value, key) {
+    prototype[key] = (function(_super) {
+      return function() {
+        var i, len,
+          args = Array.prototype.slice.call(arguments);
+
+        if (value === 'all') {
+          args = args.map(function(a) {
+            return a * pixelRatio;
+          });
+        }
+        else if (Array.isArray(value)) {
+          for (i = 0, len = value.length; i < len; i++) {
+            args[value[i]] *= pixelRatio;
+          }
+        }
+
+        return _super.apply(this, args);
+      };
+    })(prototype[key]);
+  });
+
+  // Stroke lineWidth adjustment
+  prototype.stroke = (function(_super) {
+    return function() {
+      this.lineWidth *= pixelRatio;
+      _super.apply(this, arguments);
+      this.lineWidth /= pixelRatio;
+    };
+  })(prototype.stroke);
+
+  // Text
+  //
+  prototype.fillText = (function(_super) {
+    return function() {
+      var args = Array.prototype.slice.call(arguments);
+
+      args[1] *= pixelRatio; // x
+      args[2] *= pixelRatio; // y
+
+      this.font = this.font.replace(
+        /(\d+)(px|em|rem|pt)/g,
+        function(w, m, u) {
+          return (m * pixelRatio) + u;
+        }
+      );
+
+      _super.apply(this, args);
+
+      this.font = this.font.replace(
+        /(\d+)(px|em|rem|pt)/g,
+        function(w, m, u) {
+          return (m / pixelRatio) + u;
+        }
+      );
+    };
+  })(prototype.fillText);
+
+  prototype.strokeText = (function(_super) {
+    return function() {
+      var args = Array.prototype.slice.call(arguments);
+
+      args[1] *= pixelRatio; // x
+      args[2] *= pixelRatio; // y
+
+      this.font = this.font.replace(
+        /(\d+)(px|em|rem|pt)/g,
+        function(w, m, u) {
+          return (m * pixelRatio) + u;
+        }
+      );
+
+      _super.apply(this, args);
+
+      this.font = this.font.replace(
+        /(\d+)(px|em|rem|pt)/g,
+        function(w, m, u) {
+          return (m / pixelRatio) + u;
+        }
+      );
+    };
+  })(prototype.strokeText);
+})(CanvasRenderingContext2D.prototype);
+},{}],5:[function(require,module,exports){
+(function(prototype) {
+  prototype.getContext = (function(_super) {
+    return function(type) {
+      var backingStore, ratio,
+        context = _super.call(this, type);
+
+      if (this.polyfillApplied) {
+        return context;
+      }
+
+      if (type === '2d') {
+
+        backingStore = context.backingStorePixelRatio ||
+          context.webkitBackingStorePixelRatio ||
+          context.mozBackingStorePixelRatio ||
+          context.msBackingStorePixelRatio ||
+          context.oBackingStorePixelRatio ||
+          context.backingStorePixelRatio || 1;
+
+        ratio = (window.devicePixelRatio || 1) / backingStore;
+
+        if (ratio > 1) {
+          this.style.height = this.height + 'px';
+          this.style.width = this.width + 'px';
+          this.width *= ratio;
+          this.height *= ratio;
+        }
+
+        this.polyfillApplied = true;
+      }
+
+      return context;
+    };
+  })(prototype.getContext);
+})(HTMLCanvasElement.prototype);
+},{}],6:[function(require,module,exports){
 'use strict';
 
-var RenderingInterface = require('./renderingInterface');
+require('./HTMLCanvasPolyfill.js');
+require('./CanvasRenderingContextPolyfill.js');
 
+var RenderingInterface = require('./renderingInterface');
 var topojson = require('topojson');
 var rbush = require('rbush');
 var ensureArray = require('ensure-array');
@@ -1295,6 +1458,7 @@ module.exports = L.TileLayer.Canvas.extend({
     var startTime = performance.now();
     var key = this._getTileKey(e.latlng, map.getZoom());
     var tile = this._tiles[key];
+    var pixelRatio = this._getPixelRatio(tile);
     var i;
 
     if (!tile) {
@@ -1310,6 +1474,7 @@ module.exports = L.TileLayer.Canvas.extend({
     if (!tile._spatialIndex) {
       // Build spatial index using bounds of each feature in tile
       tile._spatialIndex = rbush(9);
+
       var elements = [];
 
       layerKeys.forEach(function (layer) {
@@ -1337,6 +1502,9 @@ module.exports = L.TileLayer.Canvas.extend({
 
     var x = e.layerPoint.x - tile._leaflet_pos.x;
     var y = e.layerPoint.y - tile._leaflet_pos.y;
+    x *= pixelRatio;
+    y *= pixelRatio;
+
     var elements = tile._spatialIndex.search([x, y, x, y]);
     var features = [];
 
@@ -1434,8 +1602,8 @@ module.exports = L.TileLayer.Canvas.extend({
       }
     });
   },
-  clippedProjector: function (tilePoint, layer, canvasSize) {
-    var projector = this.projector(tilePoint, layer, canvasSize);
+  clippedProjector: function (tilePoint, layer, canvasSize, pixelRatio) {
+    var projector = this.projector(tilePoint, layer, canvasSize, pixelRatio);
 
     var clip = d3.geo.clipExtent()
       .extent([[-8, -8], [canvasSize + 8, canvasSize + 8]]);
@@ -1496,6 +1664,7 @@ module.exports = L.TileLayer.Canvas.extend({
 
     var canvasSize = canvas.width;
     context.clearRect(0, 0, canvasSize, canvasSize);
+    var pixelRatio = this._getPixelRatio(canvas);
 
     var paths = {};
 
@@ -1506,7 +1675,7 @@ module.exports = L.TileLayer.Canvas.extend({
 
         if (typeof paths[renderer.layer] == 'undefined') {
           paths[renderer.layer] = d3.geo.path()
-            .projection(self.clippedProjector(tilePoint, renderer.layer, canvasSize))
+            .projection(self.clippedProjector(tilePoint, renderer.layer, canvasSize, pixelRatio))
             .context(context);
         }
 
@@ -1577,8 +1746,8 @@ module.exports = L.TileLayer.Canvas.extend({
       var startTime = performance.now();
       var offScreenCanvas = document.createElement('canvas');
 
-      offScreenCanvas.width = canvas.width;
-      offScreenCanvas.height = canvas.height;
+      offScreenCanvas.width = self.options.tileSize;
+      offScreenCanvas.height = self.options.tileSize;
 
       self.drawData(offScreenCanvas, tilePoint, canvas._layers, function (err) {
         animationFrame && window.cancelAnimationFrame(animationFrame);
@@ -1600,16 +1769,7 @@ module.exports = L.TileLayer.Canvas.extend({
     if (canvas) {
       var context = canvas.getContext('2d');
       var components = id.split(':');
-      context.clearRect(0, 0, canvas.width, canvas.height);
       this.drawTile(canvas, {x: components[0], y: components[1]}, this._map.getZoom());
-    }
-  },
-
-  clearTile: function (id) {
-    var canvas = this._tiles[id];
-    if (canvas) {
-      var context = canvas.getContext('2d');
-      context.clearRect(0, 0, canvas.width, canvas.height);
     }
   },
 
@@ -1667,6 +1827,21 @@ module.exports = L.TileLayer.Canvas.extend({
     }
 
     return layers;
+  },
+  _getPixelRatio: function(context) {
+
+    if (!this.options.hidpiPolyfill) {
+      return 1;
+    }
+
+    var backingStore = context.backingStorePixelRatio ||
+      context.webkitBackingStorePixelRatio ||
+      context.mozBackingStorePixelRatio ||
+      context.msBackingStorePixelRatio ||
+      context.oBackingStorePixelRatio ||
+      context.backingStorePixelRatio || 1;
+
+    return (window.devicePixelRatio || 1) / backingStore;
   }
 });
 
@@ -1724,7 +1899,7 @@ module.exports.mvt = module.exports.extend({
 
     return layers;
   },
-  projector: function (tilePoint, layer, canvasSize) {
+  projector: function (tilePoint, layer, canvasSize, pixelRatio) {
     var self = this;
 
     return d3.geo.transform({
@@ -1732,13 +1907,16 @@ module.exports.mvt = module.exports.extend({
         x = x / self.layerExtents[layer] * canvasSize;
         y = y / self.layerExtents[layer] * canvasSize;
 
+        x /= pixelRatio;
+        y /= pixelRatio;
+
         this.stream.point(x, y);
       }
     });
   }
 });
 
-},{"./renderingInterface":5,"ensure-array":1,"rbush":2,"topojson":3}],5:[function(require,module,exports){
+},{"./CanvasRenderingContextPolyfill.js":4,"./HTMLCanvasPolyfill.js":5,"./renderingInterface":7,"ensure-array":1,"rbush":2,"topojson":3}],7:[function(require,module,exports){
 var RenderingInterface = function(layer, name){
   this.layer = layer;
   this.layerName = name;
@@ -1898,5 +2076,5 @@ RenderingInterface.prototype.run = function(context, features, tile, draw){
 };
 
 module.exports = RenderingInterface;
-},{}]},{},[4])(4)
+},{}]},{},[6])(6)
 });

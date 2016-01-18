@@ -1,7 +1,9 @@
 'use strict';
 
-var RenderingInterface = require('./renderingInterface');
+require('./HTMLCanvasPolyfill.js');
+require('./CanvasRenderingContextPolyfill.js');
 
+var RenderingInterface = require('./renderingInterface');
 var topojson = require('topojson');
 var rbush = require('rbush');
 var ensureArray = require('ensure-array');
@@ -103,6 +105,7 @@ module.exports = L.TileLayer.Canvas.extend({
     var startTime = performance.now();
     var key = this._getTileKey(e.latlng, map.getZoom());
     var tile = this._tiles[key];
+    var pixelRatio = this._getPixelRatio(tile);
     var i;
 
     if (!tile) {
@@ -118,6 +121,7 @@ module.exports = L.TileLayer.Canvas.extend({
     if (!tile._spatialIndex) {
       // Build spatial index using bounds of each feature in tile
       tile._spatialIndex = rbush(9);
+
       var elements = [];
 
       layerKeys.forEach(function (layer) {
@@ -145,6 +149,9 @@ module.exports = L.TileLayer.Canvas.extend({
 
     var x = e.layerPoint.x - tile._leaflet_pos.x;
     var y = e.layerPoint.y - tile._leaflet_pos.y;
+    x *= pixelRatio;
+    y *= pixelRatio;
+
     var elements = tile._spatialIndex.search([x, y, x, y]);
     var features = [];
 
@@ -242,8 +249,8 @@ module.exports = L.TileLayer.Canvas.extend({
       }
     });
   },
-  clippedProjector: function (tilePoint, layer, canvasSize) {
-    var projector = this.projector(tilePoint, layer, canvasSize);
+  clippedProjector: function (tilePoint, layer, canvasSize, pixelRatio) {
+    var projector = this.projector(tilePoint, layer, canvasSize, pixelRatio);
 
     var clip = d3.geo.clipExtent()
       .extent([[-8, -8], [canvasSize + 8, canvasSize + 8]]);
@@ -304,6 +311,7 @@ module.exports = L.TileLayer.Canvas.extend({
 
     var canvasSize = canvas.width;
     context.clearRect(0, 0, canvasSize, canvasSize);
+    var pixelRatio = this._getPixelRatio(canvas);
 
     var paths = {};
 
@@ -314,7 +322,7 @@ module.exports = L.TileLayer.Canvas.extend({
 
         if (typeof paths[renderer.layer] == 'undefined') {
           paths[renderer.layer] = d3.geo.path()
-            .projection(self.clippedProjector(tilePoint, renderer.layer, canvasSize))
+            .projection(self.clippedProjector(tilePoint, renderer.layer, canvasSize, pixelRatio))
             .context(context);
         }
 
@@ -385,8 +393,8 @@ module.exports = L.TileLayer.Canvas.extend({
       var startTime = performance.now();
       var offScreenCanvas = document.createElement('canvas');
 
-      offScreenCanvas.width = canvas.width;
-      offScreenCanvas.height = canvas.height;
+      offScreenCanvas.width = self.options.tileSize;
+      offScreenCanvas.height = self.options.tileSize;
 
       self.drawData(offScreenCanvas, tilePoint, canvas._layers, function (err) {
         animationFrame && window.cancelAnimationFrame(animationFrame);
@@ -408,16 +416,7 @@ module.exports = L.TileLayer.Canvas.extend({
     if (canvas) {
       var context = canvas.getContext('2d');
       var components = id.split(':');
-      context.clearRect(0, 0, canvas.width, canvas.height);
       this.drawTile(canvas, {x: components[0], y: components[1]}, this._map.getZoom());
-    }
-  },
-
-  clearTile: function (id) {
-    var canvas = this._tiles[id];
-    if (canvas) {
-      var context = canvas.getContext('2d');
-      context.clearRect(0, 0, canvas.width, canvas.height);
     }
   },
 
@@ -475,6 +474,21 @@ module.exports = L.TileLayer.Canvas.extend({
     }
 
     return layers;
+  },
+  _getPixelRatio: function(context) {
+
+    if (!this.options.hidpiPolyfill) {
+      return 1;
+    }
+
+    var backingStore = context.backingStorePixelRatio ||
+      context.webkitBackingStorePixelRatio ||
+      context.mozBackingStorePixelRatio ||
+      context.msBackingStorePixelRatio ||
+      context.oBackingStorePixelRatio ||
+      context.backingStorePixelRatio || 1;
+
+    return (window.devicePixelRatio || 1) / backingStore;
   }
 });
 
@@ -532,13 +546,16 @@ module.exports.mvt = module.exports.extend({
 
     return layers;
   },
-  projector: function (tilePoint, layer, canvasSize) {
+  projector: function (tilePoint, layer, canvasSize, pixelRatio) {
     var self = this;
 
     return d3.geo.transform({
       point: function (x, y) {
         x = x / self.layerExtents[layer] * canvasSize;
         y = y / self.layerExtents[layer] * canvasSize;
+
+        x /= pixelRatio;
+        y /= pixelRatio;
 
         this.stream.point(x, y);
       }
