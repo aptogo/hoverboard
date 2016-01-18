@@ -1,4 +1,659 @@
 !function(e){if("object"==typeof exports&&"undefined"!=typeof module)module.exports=e();else if("function"==typeof define&&define.amd)define([],e);else{var o;"undefined"!=typeof window?o=window:"undefined"!=typeof global?o=global:"undefined"!=typeof self&&(o=self),o.Hoverboard=e()}}(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+(function (root, factory) {
+  /*global define:true */
+
+    if (typeof exports === 'object') {
+        // Node. Does not work with strict CommonJS, but
+        // only CommonJS-like enviroments that support module.exports,
+        // like Node.
+        module.exports = factory();
+    } else if (typeof define === 'function' && define.amd) {
+        // AMD. Register as an anonymous module.
+        define([], factory);
+    } else {
+        // Browser globals
+        root.ensureArray = factory();
+    }
+}(this, function () {
+  'use strict';
+
+  function ensureArray(a, b, n) {
+    if (arguments.length === 0) return [];            //no args, ret []
+    if (arguments.length === 1) {                     //single argument
+      if (a === undefined || a === null) return [];   //  undefined or null, ret []
+      if (Array.isArray(a)) return a;                 //  isArray, return it
+    }
+    return Array.prototype.slice.call(arguments);     //return array with copy of all arguments
+  }
+
+  return ensureArray;
+}));
+
+
+},{}],2:[function(require,module,exports){
+/*
+ (c) 2015, Vladimir Agafonkin
+ RBush, a JavaScript library for high-performance 2D spatial indexing of points and rectangles.
+ https://github.com/mourner/rbush
+*/
+
+(function () {
+'use strict';
+
+function rbush(maxEntries, format) {
+
+    // jshint newcap: false, validthis: true
+    if (!(this instanceof rbush)) return new rbush(maxEntries, format);
+
+    // max entries in a node is 9 by default; min node fill is 40% for best performance
+    this._maxEntries = Math.max(4, maxEntries || 9);
+    this._minEntries = Math.max(2, Math.ceil(this._maxEntries * 0.4));
+
+    if (format) {
+        this._initFormat(format);
+    }
+
+    this.clear();
+}
+
+rbush.prototype = {
+
+    all: function () {
+        return this._all(this.data, []);
+    },
+
+    search: function (bbox) {
+
+        var node = this.data,
+            result = [],
+            toBBox = this.toBBox;
+
+        if (!intersects(bbox, node.bbox)) return result;
+
+        var nodesToSearch = [],
+            i, len, child, childBBox;
+
+        while (node) {
+            for (i = 0, len = node.children.length; i < len; i++) {
+
+                child = node.children[i];
+                childBBox = node.leaf ? toBBox(child) : child.bbox;
+
+                if (intersects(bbox, childBBox)) {
+                    if (node.leaf) result.push(child);
+                    else if (contains(bbox, childBBox)) this._all(child, result);
+                    else nodesToSearch.push(child);
+                }
+            }
+            node = nodesToSearch.pop();
+        }
+
+        return result;
+    },
+
+    collides: function (bbox) {
+
+        var node = this.data,
+            toBBox = this.toBBox;
+
+        if (!intersects(bbox, node.bbox)) return false;
+
+        var nodesToSearch = [],
+            i, len, child, childBBox;
+
+        while (node) {
+            for (i = 0, len = node.children.length; i < len; i++) {
+
+                child = node.children[i];
+                childBBox = node.leaf ? toBBox(child) : child.bbox;
+
+                if (intersects(bbox, childBBox)) {
+                    if (node.leaf || contains(bbox, childBBox)) return true;
+                    nodesToSearch.push(child);
+                }
+            }
+            node = nodesToSearch.pop();
+        }
+
+        return false;
+    },
+
+    load: function (data) {
+        if (!(data && data.length)) return this;
+
+        if (data.length < this._minEntries) {
+            for (var i = 0, len = data.length; i < len; i++) {
+                this.insert(data[i]);
+            }
+            return this;
+        }
+
+        // recursively build the tree with the given data from stratch using OMT algorithm
+        var node = this._build(data.slice(), 0, data.length - 1, 0);
+
+        if (!this.data.children.length) {
+            // save as is if tree is empty
+            this.data = node;
+
+        } else if (this.data.height === node.height) {
+            // split root if trees have the same height
+            this._splitRoot(this.data, node);
+
+        } else {
+            if (this.data.height < node.height) {
+                // swap trees if inserted one is bigger
+                var tmpNode = this.data;
+                this.data = node;
+                node = tmpNode;
+            }
+
+            // insert the small tree into the large tree at appropriate level
+            this._insert(node, this.data.height - node.height - 1, true);
+        }
+
+        return this;
+    },
+
+    insert: function (item) {
+        if (item) this._insert(item, this.data.height - 1);
+        return this;
+    },
+
+    clear: function () {
+        this.data = {
+            children: [],
+            height: 1,
+            bbox: empty(),
+            leaf: true
+        };
+        return this;
+    },
+
+    remove: function (item) {
+        if (!item) return this;
+
+        var node = this.data,
+            bbox = this.toBBox(item),
+            path = [],
+            indexes = [],
+            i, parent, index, goingUp;
+
+        // depth-first iterative tree traversal
+        while (node || path.length) {
+
+            if (!node) { // go up
+                node = path.pop();
+                parent = path[path.length - 1];
+                i = indexes.pop();
+                goingUp = true;
+            }
+
+            if (node.leaf) { // check current node
+                index = node.children.indexOf(item);
+
+                if (index !== -1) {
+                    // item found, remove the item and condense tree upwards
+                    node.children.splice(index, 1);
+                    path.push(node);
+                    this._condense(path);
+                    return this;
+                }
+            }
+
+            if (!goingUp && !node.leaf && contains(node.bbox, bbox)) { // go down
+                path.push(node);
+                indexes.push(i);
+                i = 0;
+                parent = node;
+                node = node.children[0];
+
+            } else if (parent) { // go right
+                i++;
+                node = parent.children[i];
+                goingUp = false;
+
+            } else node = null; // nothing found
+        }
+
+        return this;
+    },
+
+    toBBox: function (item) { return item; },
+
+    compareMinX: function (a, b) { return a[0] - b[0]; },
+    compareMinY: function (a, b) { return a[1] - b[1]; },
+
+    toJSON: function () { return this.data; },
+
+    fromJSON: function (data) {
+        this.data = data;
+        return this;
+    },
+
+    _all: function (node, result) {
+        var nodesToSearch = [];
+        while (node) {
+            if (node.leaf) result.push.apply(result, node.children);
+            else nodesToSearch.push.apply(nodesToSearch, node.children);
+
+            node = nodesToSearch.pop();
+        }
+        return result;
+    },
+
+    _build: function (items, left, right, height) {
+
+        var N = right - left + 1,
+            M = this._maxEntries,
+            node;
+
+        if (N <= M) {
+            // reached leaf level; return leaf
+            node = {
+                children: items.slice(left, right + 1),
+                height: 1,
+                bbox: null,
+                leaf: true
+            };
+            calcBBox(node, this.toBBox);
+            return node;
+        }
+
+        if (!height) {
+            // target height of the bulk-loaded tree
+            height = Math.ceil(Math.log(N) / Math.log(M));
+
+            // target number of root entries to maximize storage utilization
+            M = Math.ceil(N / Math.pow(M, height - 1));
+        }
+
+        node = {
+            children: [],
+            height: height,
+            bbox: null,
+            leaf: false
+        };
+
+        // split the items into M mostly square tiles
+
+        var N2 = Math.ceil(N / M),
+            N1 = N2 * Math.ceil(Math.sqrt(M)),
+            i, j, right2, right3;
+
+        multiSelect(items, left, right, N1, this.compareMinX);
+
+        for (i = left; i <= right; i += N1) {
+
+            right2 = Math.min(i + N1 - 1, right);
+
+            multiSelect(items, i, right2, N2, this.compareMinY);
+
+            for (j = i; j <= right2; j += N2) {
+
+                right3 = Math.min(j + N2 - 1, right2);
+
+                // pack each entry recursively
+                node.children.push(this._build(items, j, right3, height - 1));
+            }
+        }
+
+        calcBBox(node, this.toBBox);
+
+        return node;
+    },
+
+    _chooseSubtree: function (bbox, node, level, path) {
+
+        var i, len, child, targetNode, area, enlargement, minArea, minEnlargement;
+
+        while (true) {
+            path.push(node);
+
+            if (node.leaf || path.length - 1 === level) break;
+
+            minArea = minEnlargement = Infinity;
+
+            for (i = 0, len = node.children.length; i < len; i++) {
+                child = node.children[i];
+                area = bboxArea(child.bbox);
+                enlargement = enlargedArea(bbox, child.bbox) - area;
+
+                // choose entry with the least area enlargement
+                if (enlargement < minEnlargement) {
+                    minEnlargement = enlargement;
+                    minArea = area < minArea ? area : minArea;
+                    targetNode = child;
+
+                } else if (enlargement === minEnlargement) {
+                    // otherwise choose one with the smallest area
+                    if (area < minArea) {
+                        minArea = area;
+                        targetNode = child;
+                    }
+                }
+            }
+
+            node = targetNode;
+        }
+
+        return node;
+    },
+
+    _insert: function (item, level, isNode) {
+
+        var toBBox = this.toBBox,
+            bbox = isNode ? item.bbox : toBBox(item),
+            insertPath = [];
+
+        // find the best node for accommodating the item, saving all nodes along the path too
+        var node = this._chooseSubtree(bbox, this.data, level, insertPath);
+
+        // put the item into the node
+        node.children.push(item);
+        extend(node.bbox, bbox);
+
+        // split on node overflow; propagate upwards if necessary
+        while (level >= 0) {
+            if (insertPath[level].children.length > this._maxEntries) {
+                this._split(insertPath, level);
+                level--;
+            } else break;
+        }
+
+        // adjust bboxes along the insertion path
+        this._adjustParentBBoxes(bbox, insertPath, level);
+    },
+
+    // split overflowed node into two
+    _split: function (insertPath, level) {
+
+        var node = insertPath[level],
+            M = node.children.length,
+            m = this._minEntries;
+
+        this._chooseSplitAxis(node, m, M);
+
+        var splitIndex = this._chooseSplitIndex(node, m, M);
+
+        var newNode = {
+            children: node.children.splice(splitIndex, node.children.length - splitIndex),
+            height: node.height,
+            bbox: null,
+            leaf: false
+        };
+
+        if (node.leaf) newNode.leaf = true;
+
+        calcBBox(node, this.toBBox);
+        calcBBox(newNode, this.toBBox);
+
+        if (level) insertPath[level - 1].children.push(newNode);
+        else this._splitRoot(node, newNode);
+    },
+
+    _splitRoot: function (node, newNode) {
+        // split root node
+        this.data = {
+            children: [node, newNode],
+            height: node.height + 1,
+            bbox: null,
+            leaf: false
+        };
+        calcBBox(this.data, this.toBBox);
+    },
+
+    _chooseSplitIndex: function (node, m, M) {
+
+        var i, bbox1, bbox2, overlap, area, minOverlap, minArea, index;
+
+        minOverlap = minArea = Infinity;
+
+        for (i = m; i <= M - m; i++) {
+            bbox1 = distBBox(node, 0, i, this.toBBox);
+            bbox2 = distBBox(node, i, M, this.toBBox);
+
+            overlap = intersectionArea(bbox1, bbox2);
+            area = bboxArea(bbox1) + bboxArea(bbox2);
+
+            // choose distribution with minimum overlap
+            if (overlap < minOverlap) {
+                minOverlap = overlap;
+                index = i;
+
+                minArea = area < minArea ? area : minArea;
+
+            } else if (overlap === minOverlap) {
+                // otherwise choose distribution with minimum area
+                if (area < minArea) {
+                    minArea = area;
+                    index = i;
+                }
+            }
+        }
+
+        return index;
+    },
+
+    // sorts node children by the best axis for split
+    _chooseSplitAxis: function (node, m, M) {
+
+        var compareMinX = node.leaf ? this.compareMinX : compareNodeMinX,
+            compareMinY = node.leaf ? this.compareMinY : compareNodeMinY,
+            xMargin = this._allDistMargin(node, m, M, compareMinX),
+            yMargin = this._allDistMargin(node, m, M, compareMinY);
+
+        // if total distributions margin value is minimal for x, sort by minX,
+        // otherwise it's already sorted by minY
+        if (xMargin < yMargin) node.children.sort(compareMinX);
+    },
+
+    // total margin of all possible split distributions where each node is at least m full
+    _allDistMargin: function (node, m, M, compare) {
+
+        node.children.sort(compare);
+
+        var toBBox = this.toBBox,
+            leftBBox = distBBox(node, 0, m, toBBox),
+            rightBBox = distBBox(node, M - m, M, toBBox),
+            margin = bboxMargin(leftBBox) + bboxMargin(rightBBox),
+            i, child;
+
+        for (i = m; i < M - m; i++) {
+            child = node.children[i];
+            extend(leftBBox, node.leaf ? toBBox(child) : child.bbox);
+            margin += bboxMargin(leftBBox);
+        }
+
+        for (i = M - m - 1; i >= m; i--) {
+            child = node.children[i];
+            extend(rightBBox, node.leaf ? toBBox(child) : child.bbox);
+            margin += bboxMargin(rightBBox);
+        }
+
+        return margin;
+    },
+
+    _adjustParentBBoxes: function (bbox, path, level) {
+        // adjust bboxes along the given tree path
+        for (var i = level; i >= 0; i--) {
+            extend(path[i].bbox, bbox);
+        }
+    },
+
+    _condense: function (path) {
+        // go through the path, removing empty nodes and updating bboxes
+        for (var i = path.length - 1, siblings; i >= 0; i--) {
+            if (path[i].children.length === 0) {
+                if (i > 0) {
+                    siblings = path[i - 1].children;
+                    siblings.splice(siblings.indexOf(path[i]), 1);
+
+                } else this.clear();
+
+            } else calcBBox(path[i], this.toBBox);
+        }
+    },
+
+    _initFormat: function (format) {
+        // data format (minX, minY, maxX, maxY accessors)
+
+        // uses eval-type function compilation instead of just accepting a toBBox function
+        // because the algorithms are very sensitive to sorting functions performance,
+        // so they should be dead simple and without inner calls
+
+        // jshint evil: true
+
+        var compareArr = ['return a', ' - b', ';'];
+
+        this.compareMinX = new Function('a', 'b', compareArr.join(format[0]));
+        this.compareMinY = new Function('a', 'b', compareArr.join(format[1]));
+
+        this.toBBox = new Function('a', 'return [a' + format.join(', a') + '];');
+    }
+};
+
+
+// calculate node's bbox from bboxes of its children
+function calcBBox(node, toBBox) {
+    node.bbox = distBBox(node, 0, node.children.length, toBBox);
+}
+
+// min bounding rectangle of node children from k to p-1
+function distBBox(node, k, p, toBBox) {
+    var bbox = empty();
+
+    for (var i = k, child; i < p; i++) {
+        child = node.children[i];
+        extend(bbox, node.leaf ? toBBox(child) : child.bbox);
+    }
+
+    return bbox;
+}
+
+function empty() { return [Infinity, Infinity, -Infinity, -Infinity]; }
+
+function extend(a, b) {
+    a[0] = Math.min(a[0], b[0]);
+    a[1] = Math.min(a[1], b[1]);
+    a[2] = Math.max(a[2], b[2]);
+    a[3] = Math.max(a[3], b[3]);
+    return a;
+}
+
+function compareNodeMinX(a, b) { return a.bbox[0] - b.bbox[0]; }
+function compareNodeMinY(a, b) { return a.bbox[1] - b.bbox[1]; }
+
+function bboxArea(a)   { return (a[2] - a[0]) * (a[3] - a[1]); }
+function bboxMargin(a) { return (a[2] - a[0]) + (a[3] - a[1]); }
+
+function enlargedArea(a, b) {
+    return (Math.max(b[2], a[2]) - Math.min(b[0], a[0])) *
+           (Math.max(b[3], a[3]) - Math.min(b[1], a[1]));
+}
+
+function intersectionArea(a, b) {
+    var minX = Math.max(a[0], b[0]),
+        minY = Math.max(a[1], b[1]),
+        maxX = Math.min(a[2], b[2]),
+        maxY = Math.min(a[3], b[3]);
+
+    return Math.max(0, maxX - minX) *
+           Math.max(0, maxY - minY);
+}
+
+function contains(a, b) {
+    return a[0] <= b[0] &&
+           a[1] <= b[1] &&
+           b[2] <= a[2] &&
+           b[3] <= a[3];
+}
+
+function intersects(a, b) {
+    return b[0] <= a[2] &&
+           b[1] <= a[3] &&
+           b[2] >= a[0] &&
+           b[3] >= a[1];
+}
+
+// sort an array so that items come in groups of n unsorted items, with groups sorted between each other;
+// combines selection algorithm with binary divide & conquer approach
+
+function multiSelect(arr, left, right, n, compare) {
+    var stack = [left, right],
+        mid;
+
+    while (stack.length) {
+        right = stack.pop();
+        left = stack.pop();
+
+        if (right - left <= n) continue;
+
+        mid = left + Math.ceil((right - left) / n / 2) * n;
+        select(arr, left, right, mid, compare);
+
+        stack.push(left, mid, mid, right);
+    }
+}
+
+// Floyd-Rivest selection algorithm:
+// sort an array between left and right (inclusive) so that the smallest k elements come first (unordered)
+function select(arr, left, right, k, compare) {
+    var n, i, z, s, sd, newLeft, newRight, t, j;
+
+    while (right > left) {
+        if (right - left > 600) {
+            n = right - left + 1;
+            i = k - left + 1;
+            z = Math.log(n);
+            s = 0.5 * Math.exp(2 * z / 3);
+            sd = 0.5 * Math.sqrt(z * s * (n - s) / n) * (i - n / 2 < 0 ? -1 : 1);
+            newLeft = Math.max(left, Math.floor(k - i * s / n + sd));
+            newRight = Math.min(right, Math.floor(k + (n - i) * s / n + sd));
+            select(arr, newLeft, newRight, k, compare);
+        }
+
+        t = arr[k];
+        i = left;
+        j = right;
+
+        swap(arr, left, k);
+        if (compare(arr[right], t) > 0) swap(arr, left, right);
+
+        while (i < j) {
+            swap(arr, i, j);
+            i++;
+            j--;
+            while (compare(arr[i], t) < 0) i++;
+            while (compare(arr[j], t) > 0) j--;
+        }
+
+        if (compare(arr[left], t) === 0) swap(arr, left, j);
+        else {
+            j++;
+            swap(arr, j, right);
+        }
+
+        if (j <= k) left = j + 1;
+        if (k <= j) right = j - 1;
+    }
+}
+
+function swap(arr, i, j) {
+    var tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+}
+
+
+// export as AMD/CommonJS module or global variable
+if (typeof define === 'function' && define.amd) define('rbush', function () { return rbush; });
+else if (typeof module !== 'undefined') module.exports = rbush;
+else if (typeof self !== 'undefined') self.rbush = rbush;
+else window.rbush = rbush;
+
+})();
+
+},{}],3:[function(require,module,exports){
 !function() {
   var topojson = {
     version: "1.6.19",
@@ -534,29 +1189,225 @@
   else this.topojson = topojson;
 }();
 
-},{}],2:[function(require,module,exports){
+},{}],4:[function(require,module,exports){
+'use strict';
+
 var RenderingInterface = require('./renderingInterface');
 
 var topojson = require('topojson');
+var rbush = require('rbush');
+var ensureArray = require('ensure-array');
 
 module.exports = L.TileLayer.Canvas.extend({
   options: {
     async: true
   },
-  initialize: function(url, options){
+  initialize: function (url, options) {
+    var self = this;
+
     L.TileLayer.Canvas.prototype.initialize.call(this, options);
 
     this._tileCache = {};
+    this._features = {};
     this._renderers = [];
+
+    this.featureId = options.featureId || function (f) {
+        return f.properties.id;
+      }
+
+    if (typeof(Number.prototype.toRad) === "undefined") {
+      Number.prototype.toRad = function () {
+        return this * Math.PI / 180;
+      };
+    }
 
     this.setUrl(url);
 
-    this.on("tileunload", function(d){
+    this.on("tileunload", function (d) {
+
+      // Remove feature->tile mapping from cache
+      var tileKey = d.tile._tilePoint.x + ':' + d.tile._tilePoint.y;
+      var layers = self._activeLayers(d.tile);
+
+      layers.forEach(function (key) {
+        var layer = d.tile._layers[key];
+        for (var i = layer.features.length - 1; i >= 0; i--) {
+          var feature = layer.features[i];
+          var featureId = self.featureId(feature);
+          if (self._features[featureId]) {
+            delete self._features[featureId].tiles[tileKey];
+
+            if (Object.keys(self._features[featureId].tiles).length === 0) {
+              delete self._features[featureId];
+            }
+          }
+        }
+      });
+
       if (d.tile.abort) d.tile.abort();
       d.tile.abort = null;
     });
   },
-  projector: function(tilePoint, layer, canvasSize){
+
+  onAdd: function (map) {
+
+    L.TileLayer.Canvas.prototype.onAdd.call(this, map);
+
+    if (this.options.onclick && typeof this.options.onclick === 'function') {
+      this.clickHandler = this.handleClick.bind(this);
+      map.on('click', this.clickHandler);
+    }
+
+    if (this.options.onmousemove && typeof this.options.onmousemove === 'function') {
+      this.mouseMoveHandler = this.handleMouseMove.bind(this);
+      map.on('mousemove', this.mouseMoveHandler);
+    }
+
+  },
+
+  onRemove: function (map) {
+
+    L.TileLayer.Canvas.prototype.onRemove.call(this, map);
+
+    if (this.clickHandler) {
+      map.off('click', this.clickHandler);
+    }
+
+    map.off('click', this.clickHandler);
+    if (this.mouseMoveHandler) {
+      map.off('mousemove', this.mouseMoveHandler);
+    }
+  },
+
+  handleClick: function (e) {
+    var features = this.featuresAt(e);
+    this.options.onclick(e, features, this);
+  },
+
+  handleMouseMove: function (e) {
+    var features = this.featuresAt(e);
+    this.options.onmousemove(e, features, this);
+  },
+
+  featuresAt: function (e) {
+
+    var self = this;
+    var startTime = performance.now();
+    var key = this._getTileKey(e.latlng, map.getZoom());
+    var tile = this._tiles[key];
+    var i;
+
+    if (!tile) {
+      return [];
+    }
+
+    if (!tile._layers) {
+      return [];
+    }
+
+    var layerKeys = Object.keys(tile._layers);
+
+    if (!tile._spatialIndex) {
+      // Build spatial index using bounds of each feature in tile
+      tile._spatialIndex = rbush(9);
+      var elements = [];
+
+      layerKeys.forEach(function (layer) {
+        for (i = tile._layers[layer].features.length - 1; i >= 0; i--) {
+          var feature = tile._layers[layer].features[i];
+          feature.layer = layer;
+
+          var indexElement = turf.extent(feature);
+
+          // Convert feature coords to tile coords for indexing
+          indexElement[0] = indexElement[0] / self.layerExtents[feature.layer] * tile.width;
+          indexElement[1] = indexElement[1] / self.layerExtents[feature.layer] * tile.height;
+          indexElement[2] = indexElement[2] / self.layerExtents[feature.layer] * tile.width;
+          indexElement[3] = indexElement[3] / self.layerExtents[feature.layer] * tile.height;
+
+          // Add feature to indexElement as custom data
+          indexElement.push(feature);
+          elements.push(indexElement);
+        }
+      });
+
+      // Bulk load elements into spatial index
+      tile._spatialIndex.load(elements);
+    }
+
+    var x = e.layerPoint.x - tile._leaflet_pos.x;
+    var y = e.layerPoint.y - tile._leaflet_pos.y;
+    var elements = tile._spatialIndex.search([x, y, x, y]);
+    var features = [];
+
+    for (var i = elements.length - 1; i >= 0; i--) {
+
+      var feature = elements[i][4];
+
+      // Convert tile coords to feature coords for hit testing geometry
+      var x1 = x / tile.width * self.layerExtents[feature.layer];
+      var y1 = y / tile.height * self.layerExtents[feature.layer];
+      var pt = turf.point([x1, y1]);
+
+      if (feature.geometry.type === 'Polygon' || feature.geometry.type === 'MultiPolygon') {
+        if (turf.inside(pt, feature)) {
+          features.push(self._features[self.featureId(feature)]);
+        }
+      }
+      else if (feature.geometry.type === 'LineString') {
+        var distance = this._getDistanceFromLine(pt.geometry.coordinates, feature.geometry.coordinates);
+        distance = distance / self.layerExtents[feature.layer] * tile.width;
+        if (distance < 5) {
+          features.push(self._features[self.featureId(feature)]);
+        }
+      }
+    }
+
+    //console.log('Hit test in ' + (performance.now() - startTime) + 'ms');
+
+    return features;
+  },
+
+  _getTileKey: function (latlng, zoom) {
+    var xtile = parseInt(Math.floor((latlng.lng + 180) / 360 * (1 << zoom)));
+    var ytile = parseInt(Math.floor((1 - Math.log(Math.tan(latlng.lat.toRad()) + 1 / Math.cos(latlng.lat.toRad())) / Math.PI) / 2 * (1 << zoom)));
+    return [xtile, ytile].join(':');
+  },
+
+  _getDistanceFromLine: function (pt, pts) {
+    var min = Number.POSITIVE_INFINITY;
+    if (pts && pts.length > 1) {
+      pt = L.point(pt[0], pt[1]);
+      for (var i = 0, l = pts.length - 1; i < l; i++) {
+        var test = this._projectPointOnLineSegment(pt, pts[i], pts[i + 1]);
+        if (test.distance <= min) {
+          min = test.distance;
+        }
+      }
+    }
+    return min;
+  },
+
+  _projectPointOnLineSegment: function (p, r0, r1) {
+    r0 = L.point(r0[0], r0[1]);
+    r1 = L.point(r1[0], r1[1]);
+
+    var lineLength = r0.distanceTo(r1);
+    if (lineLength < 1) {
+      return {distance: p.distanceTo(r0), coordinate: r0};
+    }
+    var u = ((p.x - r0.x) * (r1.x - r0.x) + (p.y - r0.y) * (r1.y - r0.y)) / Math.pow(lineLength, 2);
+    if (u < 0.0000001) {
+      return {distance: p.distanceTo(r0), coordinate: r0};
+    }
+    if (u > 0.9999999) {
+      return {distance: p.distanceTo(r1), coordinate: r1};
+    }
+    var a = L.point(r0.x + u * (r1.x - r0.x), r0.y + u * (r1.y - r0.y));
+    return {distance: p.distanceTo(a), point: a};
+  },
+
+  projector: function (tilePoint, layer, canvasSize) {
     var tilesLong = Math.pow(2, tilePoint.z);
     var sideLength = 40075016.68557849;
     var pixelsPerTile = sideLength / tilesLong;
@@ -565,61 +1416,66 @@ module.exports = L.TileLayer.Canvas.extend({
     var y = tilePoint.y % tilesLong;
 
     var tilePosition = {
-      top: (sideLength/2) - ((y+1) / tilesLong * sideLength),
-      left: -(sideLength/2) + (x / tilesLong * sideLength)
+      top: (sideLength / 2) - ((y + 1) / tilesLong * sideLength),
+      left: -(sideLength / 2) + (x / tilesLong * sideLength)
     };
 
-    tilePosition.bottom = tilePosition.top+pixelsPerTile;
-    tilePosition.right = tilePosition.left+pixelsPerTile;
+    tilePosition.bottom = tilePosition.top + pixelsPerTile;
+    tilePosition.right = tilePosition.left + pixelsPerTile;
 
     return d3.geo.transform({
-      point: function(lng, lat) {
+      point: function (lng, lat) {
         var point = L.CRS.EPSG3857.project({lat: lat, lng: lng});
-        point.x = (point.x - tilePosition.left)/pixelsPerTile;
-        point.y = 1-((point.y - tilePosition.top)/pixelsPerTile);
+        point.x = (point.x - tilePosition.left) / pixelsPerTile;
+        point.y = 1 - ((point.y - tilePosition.top) / pixelsPerTile);
         point.x *= canvasSize;
         point.y *= canvasSize;
         this.stream.point(point.x, point.y);
       }
     });
   },
-  clippedProjector: function(tilePoint, layer, canvasSize){
+  clippedProjector: function (tilePoint, layer, canvasSize) {
     var projector = this.projector(tilePoint, layer, canvasSize);
 
     var clip = d3.geo.clipExtent()
-      .extent([[-8, -8], [canvasSize+8, canvasSize+8]]);
+      .extent([[-8, -8], [canvasSize + 8, canvasSize + 8]]);
 
-    return {stream: function(s) { return projector.stream(clip.stream(s)); }};
+    return {
+      stream: function (s) {
+        return projector.stream(clip.stream(s));
+      }
+    };
   },
-  _fetchTile: function(tilePoint, callback){
-    var cacheKey = this._url+'@@'+JSON.stringify(tilePoint);
+  _fetchTile: function (tilePoint, callback) {
+    var cacheKey = this._url + '@@' + JSON.stringify(tilePoint);
 
     if (typeof this._tileCache[cacheKey] === 'function') {
       this._tileCache[cacheKey](callback);
       //callback(null, this._tileCache[cacheKey]);
-      return function(){};
+      return function () {
+      };
     } else {
       var self = this;
       var url = this.getTileUrl(tilePoint);
       var callbackList = [];
-      this._tileCache[cacheKey] = function(cb){
-        callbackList.push(cb);
-      };
-      return this.fetch(url, function(err, result){
+      //this._tileCache[cacheKey] = function (cb) {
+      //  callbackList.push(cb);
+      //};
+      return this.fetch(url, function (err, result) {
         if (!err) {
           result = self.parse(result);
-          callbackList.forEach(function(cb){
+          callbackList.forEach(function (cb) {
             cb(null, result);
           });
-          self._tileCache[cacheKey] = function(cb){
-            cb(null, result);
-          };
+          //  self._tileCache[cacheKey] = function (cb) {
+          //    cb(null, result);
+          //  };
         }
         callback(err, result);
       });
     }
   },
-  render: function(layerName, fn){
+  render: function (layerName, fn) {
     if (typeof fn == 'function') {
       this._renderers.push({
         layer: layerName,
@@ -635,7 +1491,7 @@ module.exports = L.TileLayer.Canvas.extend({
       return renderer;
     }
   },
-  drawData: function(canvas, tilePoint, data, callback){
+  drawData: function (canvas, tilePoint, data, callback) {
     var context = canvas.getContext('2d');
 
     var canvasSize = canvas.width;
@@ -645,7 +1501,7 @@ module.exports = L.TileLayer.Canvas.extend({
 
     if (this._renderers.length) {
       var self = this;
-      this._renderers.forEach(function(renderer){
+      this._renderers.forEach(function (renderer) {
         if (!data[renderer.layer]) return;
 
         if (typeof paths[renderer.layer] == 'undefined') {
@@ -654,7 +1510,7 @@ module.exports = L.TileLayer.Canvas.extend({
             .context(context);
         }
 
-        renderer.run(context, data[renderer.layer].features, tilePoint, function(features){
+        renderer.run(context, data[renderer.layer].features, tilePoint, function (features) {
           if (typeof features == 'object' && !Array.isArray(features)) {
             features = [features];
           }
@@ -668,51 +1524,155 @@ module.exports = L.TileLayer.Canvas.extend({
       callback(new Error('No renderer specified!'));
     }
   },
-  drawTile: function(canvas, tilePoint, zoom){
-    if (typeof this._url == 'undefined') {
+  drawTile: function (canvas, tilePoint, zoom) {
+    if (typeof this._url === 'undefined') {
       this.tileDrawn(canvas);
       return;
     }
 
     var startTime = performance.now();
-
+    var animationFrame;
+    var self = this;
 
     this._adjustTilePoint(tilePoint);
 
-    var animationFrame;
+    if (canvas._layers) {
+      doDraw();
+    }
+    else {
+      canvas.abort = this._fetchTile(tilePoint, function (err, result) {
+        if (err) {
+          self.tileDrawn(canvas);
+          throw err;
+        }
+        canvas._layers = self._filterLayers(result);
+        var layers = self._activeLayers(canvas);
+        var tileKey = tilePoint.x + ':' + tilePoint.y;
 
-    var self = this;
-    canvas.abort = this._fetchTile(tilePoint, function(err, result){
-      if (err) {
-        self.tileDrawn(canvas);
-        throw err;
-      }
+        layers.forEach(function (key) {
+          var layer = canvas._layers[key];
+          for (var i = layer.features.length - 1; i >= 0; i--) {
+            var feature = layer.features[i];
+            var featureId = self.featureId(feature);
+            if (self._features[featureId]) {
+              self._features[featureId].tiles[tileKey] = true;
+            }
+            else {
+              var tiles = {};
+              tiles[tileKey] = true;
+              self._features[featureId] = {
+                id: featureId,
+                properties: feature.properties,
+                tiles: tiles
+              };
+            }
+          }
+        });
 
+        doDraw();
+      });
+    }
+
+    function doDraw() {
       var startTime = performance.now();
-
       var offScreenCanvas = document.createElement('canvas');
+
       offScreenCanvas.width = canvas.width;
       offScreenCanvas.height = canvas.height;
 
-      self.drawData(offScreenCanvas, tilePoint, result, function(err){
+      self.drawData(offScreenCanvas, tilePoint, canvas._layers, function (err) {
         animationFrame && window.cancelAnimationFrame(animationFrame);
-        animationFrame = window.requestAnimationFrame(function(){
+        animationFrame = window.requestAnimationFrame(function () {
           canvas.getContext('2d').drawImage(offScreenCanvas, 0, 0);
           self.tileDrawn(canvas);
-          console.log('Render: ' + (performance.now() - startTime) + 'ms');
+          //console.log('Render: ' + (performance.now() - startTime) + 'ms');
         });
 
         if (err) {
           throw err;
         }
       });
+    }
+  },
+
+  redrawTile: function (id) {
+    var canvas = this._tiles[id];
+    if (canvas) {
+      var context = canvas.getContext('2d');
+      var components = id.split(':');
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      this.drawTile(canvas, {x: components[0], y: components[1]}, this._map.getZoom());
+    }
+  },
+
+  clearTile: function (id) {
+    var canvas = this._tiles[id];
+    if (canvas) {
+      var context = canvas.getContext('2d');
+      context.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  },
+
+  redrawFeatures: function (features) {
+
+    features = ensureArray(features);
+
+    var self = this;
+    var key;
+    var tilesToRedraw = {};
+
+    features.forEach(function (feature) {
+      var featureId = feature && self.featureId(feature);
+      if (!self._features[featureId]) {
+        return;
+      }
+      var featureTiles = self._features[featureId].tiles;
+      for (key in featureTiles) {
+        tilesToRedraw[key] = true;
+      }
     });
+
+
+    for (key in tilesToRedraw) {
+      self.redrawTile(key);
+    }
+  },
+
+
+  _filterLayers: function (input) {
+    if (!this.options.layers) {
+      return input;
+    }
+
+    var filtered = {};
+    this.options.layers.forEach(function (key) {
+      filtered[key] = input[key];
+    });
+
+    return filtered;
+  },
+
+  // Return active layer names for tile
+  _activeLayers: function(tile) {
+    if (!this.options.layers) {
+      return Object.keys(tile._layers);
+    }
+
+    var layers = [];
+
+    for (var layer in tile._layers) {
+      if (this.options.layers[layer]) {
+        layers.push(layer);
+      }
+    }
+
+    return layers;
   }
 });
 
 module.exports.json = module.exports.extend({
-  fetch: function(url, callback){
-    var xhr = d3.json(url, function(err, xhrResponse){
+  fetch: function (url, callback) {
+    var xhr = d3.json(url, function (err, xhrResponse) {
       callback(err, xhrResponse.response || xhrResponse);
     });
 
@@ -721,13 +1681,13 @@ module.exports.json = module.exports.extend({
 });
 
 module.exports.geojson = module.exports.json.extend({
-  parse: function(data){
+  parse: function (data) {
     return {geojson: data};
   }
 });
 
 module.exports.topojson = module.exports.json.extend({
-  parse: function(data){
+  parse: function (data) {
     var layers = {};
 
     for (var key in data.objects) {
@@ -739,17 +1699,17 @@ module.exports.topojson = module.exports.json.extend({
 });
 
 module.exports.mvt = module.exports.extend({
-  fetch: function(url, callback){
+  fetch: function (url, callback) {
     var xhr = d3.xhr(url)
       .responseType('arraybuffer')
-      .get(function(err, xhrResponse){
+      .get(function (err, xhrResponse) {
         callback(err, xhrResponse.response || xhrResponse);
       });
 
     return xhr.abort.bind(xhr);
   },
-  parse: function(data){
-    var tile = new VectorTile( new pbf( new Uint8Array(data) ) );
+  parse: function (data) {
+    var tile = new VectorTile(new pbf(new Uint8Array(data)));
 
     var layers = {};
 
@@ -764,13 +1724,13 @@ module.exports.mvt = module.exports.extend({
 
     return layers;
   },
-  projector: function(tilePoint, layer, canvasSize){
+  projector: function (tilePoint, layer, canvasSize) {
     var self = this;
 
     return d3.geo.transform({
-      point: function(x, y) {
-        x = x/self.layerExtents[layer]*canvasSize;
-        y = y/self.layerExtents[layer]*canvasSize;
+      point: function (x, y) {
+        x = x / self.layerExtents[layer] * canvasSize;
+        y = y / self.layerExtents[layer] * canvasSize;
 
         this.stream.point(x, y);
       }
@@ -778,7 +1738,7 @@ module.exports.mvt = module.exports.extend({
   }
 });
 
-},{"./renderingInterface":3,"topojson":1}],3:[function(require,module,exports){
+},{"./renderingInterface":5,"ensure-array":1,"rbush":2,"topojson":3}],5:[function(require,module,exports){
 var RenderingInterface = function(layer, name){
   this.layer = layer;
   this.layerName = name;
@@ -925,6 +1885,8 @@ RenderingInterface.prototype.run = function(context, features, tile, draw){
             lineWidth = lineWidth[0];
           }
 
+          context.lineWidth = lineWidth;
+          context.strokeStyle = strokeStyle;
           draw(feature);
           context.stroke();
         });
@@ -936,5 +1898,5 @@ RenderingInterface.prototype.run = function(context, features, tile, draw){
 };
 
 module.exports = RenderingInterface;
-},{}]},{},[2])(2)
+},{}]},{},[4])(4)
 });

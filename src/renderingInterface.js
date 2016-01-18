@@ -144,6 +144,8 @@ RenderingInterface.prototype.run = function(context, features, tile, draw){
             lineWidth = lineWidth[0];
           }
 
+          context.lineWidth = lineWidth;
+          context.strokeStyle = strokeStyle;
           draw(feature);
           context.stroke();
         });

@@ -1,13 +1,14 @@
+'use strict';
+
 var map = L.map('map', {
-  center: [44.327,-72.888],
-  zoom: 12,
-  zoomControl: false
+  center: [51.5219475, -0.0685291],
+  zoom: 14
 });
 
-//L.tileLayer('http://{s}.tile.stamen.com/terrain-background/{z}/{x}/{y}.jpg').addTo(map);
-
-//var url = 'http://{s}.tile.openstreetmap.us/vectiles-highroad/{z}/{x}/{y}.topojson';
-var url = 'https://{s}.tiles.mapbox.com/v4/mapbox.mapbox-streets-v5,mapbox.mapbox-terrain-v2/{z}/{x}/{y}.vector.pbf?access_token=pk.eyJ1IjoiZmFyYWRheTIiLCJhIjoiTUVHbDl5OCJ9.buFaqIdaIM3iXr1BOYKpsQ';
+var baseUrl = 'https://{s}.tiles.mapbox.com/v4/mapbox.mapbox-streets-v5,mapbox.mapbox-terrain-v2/{z}/{x}/{y}.vector.pbf?access_token=pk.eyJ1Ijoicm9iaW5zdW1tZXJoaWxsIiwiYSI6IndJNjdoc1UifQ.uKj4tO3T3wlFFCwcJLJlTg';
+var buildingsUrl = 'http://localhost:3000/vector-tiles/feature/building_heights/{z}/{x}/{y}.pbf';
+var selectedFeature;
+var hoveredFeature;
 
 var colors = {
   land: '#FCFBE7',
@@ -30,11 +31,31 @@ var colors = {
   little_road: '#853A6C'
 };
 
-(new Hoverboard.mvt(url, {hidpiPolyfill: true}))
 
-  .render('landuse')
+function buildingColor(height) {
+  return height > 200 ? "#9e0142" :
+    height > 150 ? "#d53e4f" :
+      height > 120 ? "#f46d43" :
+        height > 100 ? "#fdae61" :
+          height > 75 ? "#fee08b" :
+            height > 50 ? "#fee08b" :
+              height > 40 ? "#e6f598" :
+                height > 20 ? "#abdda4" :
+                  height > 10 ? "#66c2a5" :
+                    height > 5 ? "#3288bd" :
+                      height > 0 ? "#5e4fa2" : "#00cc00";
+}
+
+var baseLayer = new Hoverboard.mvt(baseUrl, {
+  hidpiPolyfill: false,
+  layers: ['road', 'water']
+});
+
+baseLayer
+    .render('landuse')
     .minZoom(12)
     .fillBy('class', {
+      agriculture: colors.grass,
       cemetery: colors.cemetery,
       college: colors.school,
       commercial: colors.industrial,
@@ -69,26 +90,16 @@ var colors = {
 
   .render('contour')
     .stroke(0.6, 'rgba(20,20,35,0.3')
-    // Try out hypsometric nonsense here:
-    /*.fillBy('ele', {
-      10: '#000',
-      20: '#111'
-      etc . . .
-    })*/
 
   .render('road')
-    .where('type', ['motorway', 'trunk'])
-    .stroke(1.75, 'rgba(2555, 255, 255, 0.5)')
-    .stroke(0.75, colors.big_road)
+  .where('type', ['motorway', 'trunk'])
+  .stroke(1.75, 'rgba(2555, 255, 255, 0.5)')
+  .stroke(0.75, colors.big_road)
 
   .render('road')
-    .whereNot('type', ['motorway', 'trunk'])
-    .stroke(1, 'rgba(255, 255, 255, 0.5)')
-    .stroke(0.5, colors.little_road)
-
-  .render('building')
-    .fill('#888896')
-    .stroke(0.5, 'rgba(0,0,0,0.4)')
+  .whereNot('type', ['motorway', 'trunk'])
+  .stroke(1, 'rgba(255, 255, 255, 0.5)')
+  .stroke(0.5, colors.little_road)
 
   .render('water')
     .fill(colors.water)
@@ -98,4 +109,67 @@ var colors = {
 
   .addTo(map);
 
-var hash = L.hash(map);
+var buildingsLayer = new Hoverboard.mvt(buildingsUrl, {
+  hidpiPolyfill: false,
+  featureId: function (feature) {
+    return feature.properties.id;
+  },
+  onclick: function (e, features, layer) {
+
+    var oldSelectedFeature;
+
+    if (selectedFeature && features.length === 0) {
+      oldSelectedFeature = selectedFeature;
+      selectedFeature = null;
+      layer.redrawFeatures(oldSelectedFeature);
+      return;
+    }
+
+    oldSelectedFeature = selectedFeature;
+    selectedFeature = features[0];
+
+    var oldId = oldSelectedFeature && oldSelectedFeature.properties.id;
+    var newId = selectedFeature && selectedFeature.properties.id;
+
+    if (oldId !== newId) {
+      layer.redrawFeatures([oldSelectedFeature, selectedFeature]);
+    }
+  },
+
+  onmousemove: function (e, features, layer) {
+
+    if (hoveredFeature && features.length === 0) {
+      var oldHoveredFeature = hoveredFeature;
+      hoveredFeature = null;
+      layer.redrawFeatures(oldHoveredFeature);
+      return;
+    }
+
+    var oldHoveredFeature = hoveredFeature;
+    hoveredFeature = features[0];
+
+    var oldId = oldHoveredFeature? oldHoveredFeature.properties.id : null;
+    var newId = hoveredFeature? hoveredFeature.properties.id : null;
+
+    if (oldId !== newId) {
+      layer.redrawFeatures([oldHoveredFeature, hoveredFeature]);
+    }
+  }
+});
+
+buildingsLayer
+  .render('building_heights')
+  .minZoom(12)
+  .fill(function (d) {
+
+    if (selectedFeature && d.properties.id === selectedFeature.properties.id) {
+      return 'red';
+    }
+
+    if (hoveredFeature && d.properties.id === hoveredFeature.properties.id) {
+      return 'blue';
+    }
+
+    return buildingColor(d.properties.max);
+  })
+  .addTo(map);

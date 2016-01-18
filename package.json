@@ -24,6 +24,8 @@
   },
   "homepage": "https://github.com/devTristan/hoverboard",
   "dependencies": {
+    "ensure-array": "0.0.5",
+    "rbush": "^1.4.2",
     "topojson": "^1.6.18"
   }
 }

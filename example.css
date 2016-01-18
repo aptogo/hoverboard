@@ -7,10 +7,9 @@ html, body {
 #map {
   width: 100%;
   height: 100%;
-  background: #bcd9bf;
+  background: rgba(0,0,0,1);
 }
 
 .leaflet-tile-container:first-child {
-  /* This prevents reference labels from being drawn twice at the same time, which is bad */
-  display: none;
+
 }
