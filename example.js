@@ -16,7 +16,7 @@ var hoveredFeature;
 
 var colors = {
   land: '#FCFBE7',
-  water: '#368ed9',
+  water: '#13073A',
   grass: '#E6F2C1',
   beach: '#FFEEC7',
   park: '#DAF2C1',
@@ -31,8 +31,8 @@ var colors = {
   commercial: '#FCFBE7',
   industrial: '#FCFBE7',
   parking: '#EEE',
-  big_road: '#853A6C',
-  little_road: '#853A6C'
+  big_road: '#555',
+  little_road: '#555'
 };
 
 function buildingColor(height) {
@@ -157,6 +157,18 @@ var buildingsLayer = new Hoverboard.mvt(buildingsUrl, {
 buildingsLayer
   .render('building_heights')
   .minZoom(12)
+  .stroke(2, function (d) {
+
+    if (selectedFeature && d.properties.id === selectedFeature.properties.id) {
+      return 'white';
+    }
+
+    if (hoveredFeature && d.properties.id === hoveredFeature.properties.id) {
+      return 'white';
+    }
+
+    return null;
+  })
   .fill(function (d) {
 
     if (selectedFeature && d.properties.id === selectedFeature.properties.id) {

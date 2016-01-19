@@ -9,25 +9,11 @@ var RenderingInterface = require('./renderingInterface');
 var topojson = require('topojson');
 var Protobuf = require('pbf');
 var VectorTile = require('vector-tile').VectorTile;
-var VectorTileLayer = require('vector-tile').VectorTileLayer;
 var rbush = require('rbush');
 var ensureArray = require('ensure-array');
-
-if (!VectorTileLayer.prototype.toGeoJSON) {
-  VectorTileLayer.prototype.toGeoJSON = function () {
-    var geojson = {
-      type: 'FeatureCollection',
-      features: []
-    };
-
-    for (var f = 0; f < this.length; f++) {
-      geojson.features.push(this.feature(f).toGeoJSON());
-    }
-
-    return geojson;
-  };
-}
-
+var loadDebug = require('debug')('hoverboard:load');
+var renderDebug = require('debug')('hoverboard:render');
+var hitTestDebug = require('debug')('hoverboard:hit-test');
 
 module.exports = L.TileLayer.Canvas.extend({
   options: {
@@ -78,9 +64,12 @@ module.exports = L.TileLayer.Canvas.extend({
       if (d.tile.abort) d.tile.abort();
       d.tile.abort = null;
     });
+
   },
 
   onAdd: function (map) {
+
+    var self = this;
 
     L.TileLayer.Canvas.prototype.onAdd.call(this, map);
 
@@ -94,6 +83,16 @@ module.exports = L.TileLayer.Canvas.extend({
       map.on('mousemove', this.mouseMoveHandler);
     }
 
+    this.moveStartHandler = function () {
+      self.moving = true;
+    }.bind(this);
+
+    this.moveEndHandler = function () {
+      self.moving = false;
+    }.bind(this);
+
+    map.on('movestart', this.moveStartHandler);
+    map.on('moveend', this.moveEndHandler);
   },
 
   onRemove: function (map) {
@@ -108,6 +107,9 @@ module.exports = L.TileLayer.Canvas.extend({
     if (this.mouseMoveHandler) {
       map.off('mousemove', this.mouseMoveHandler);
     }
+
+    map.off('movestart', this.moveStartHandler);
+    map.off('moveend', this.moveEndHandler);
   },
 
   handleClick: function (e) {
@@ -116,6 +118,11 @@ module.exports = L.TileLayer.Canvas.extend({
   },
 
   handleMouseMove: function (e) {
+
+    if (this.moving) {
+      return;
+    }
+
     var features = this.featuresAt(e);
     this.options.onmousemove(e, features, this);
   },
@@ -168,6 +175,7 @@ module.exports = L.TileLayer.Canvas.extend({
       // Bulk load elements into spatial index
       tile._spatialIndex.load(elements);
     }
+
     // jshint -W106
     var x = e.layerPoint.x - tile._leaflet_pos.x;
     var y = e.layerPoint.y - tile._leaflet_pos.y;
@@ -200,7 +208,7 @@ module.exports = L.TileLayer.Canvas.extend({
       }
     }
 
-    //console.log('Hit test in ' + (performance.now() - startTime) + 'ms');
+    hitTestDebug(features.length + ' features found in ' + (performance.now() - startTime) + 'ms');
 
     return features;
   },
@@ -299,9 +307,13 @@ module.exports = L.TileLayer.Canvas.extend({
       //this._tileCache[cacheKey] = function (cb) {
       //  callbackList.push(cb);
       //};
+      var startTime = performance.now();
       return this.fetch(url, function (err, result) {
         if (!err) {
+          loadDebug(self._map.getZoom() + ':' + tilePoint.x + ':' + tilePoint.y + ' loaded in ' + (performance.now() - startTime) + 'ms');
+          startTime = performance.now();
           result = self.parse(result);
+          loadDebug(self._map.getZoom() + ':' + tilePoint.x + ':' + tilePoint.y + ' parsed in ' + (performance.now() - startTime) + 'ms');
           callbackList.forEach(function (cb) {
             cb(null, result);
           });
@@ -349,6 +361,8 @@ module.exports = L.TileLayer.Canvas.extend({
             .context(context);
         }
 
+        renderDebug('Rendering ' + renderer.layer + ': ' + data[renderer.layer].features.length + ' features');
+
         renderer.run(context, data[renderer.layer].features, tilePoint, function (features) {
           if (typeof features === 'object' && !Array.isArray(features)) {
             features = [features];
@@ -369,7 +383,6 @@ module.exports = L.TileLayer.Canvas.extend({
       return;
     }
 
-    var startTime = performance.now();
     var animationFrame;
     var self = this;
 
@@ -414,23 +427,24 @@ module.exports = L.TileLayer.Canvas.extend({
 
     function doDraw() {
       var startTime = performance.now();
-      var offScreenCanvas = document.createElement('canvas');
 
+      var offScreenCanvas = document.createElement('canvas');
       offScreenCanvas.width = self.options.tileSize;
       offScreenCanvas.height = self.options.tileSize;
 
       self.drawData(offScreenCanvas, tilePoint, canvas._layers, function (err) {
-        // jshint -W030
-        animationFrame && window.cancelAnimationFrame(animationFrame);
-        animationFrame = window.requestAnimationFrame(function () {
-          canvas.getContext('2d').drawImage(offScreenCanvas, 0, 0);
-          self.tileDrawn(canvas);
-          //console.log('Render: ' + (performance.now() - startTime) + 'ms');
-        });
 
         if (err) {
           throw err;
         }
+
+        var ctx = canvas.getContext('2d')
+        ctx.clearRect(0, 0, self.options.tileSize, self.options.tileSize);
+        ctx.drawImage(offScreenCanvas, 0, 0);
+
+        self.tileDrawn(canvas);
+
+        renderDebug(self._map.getZoom() + ':' + tilePoint.x + ':' + tilePoint.y + ' rendered in ' + (performance.now() - startTime) + 'ms');
       });
     }
   },
@@ -463,12 +477,10 @@ module.exports = L.TileLayer.Canvas.extend({
       }
     });
 
-
     for (key in tilesToRedraw) {
       self.redrawTile(key);
     }
   },
-
 
   _filterLayers: function (input) {
     if (!this.options.layers) {
@@ -499,6 +511,7 @@ module.exports = L.TileLayer.Canvas.extend({
 
     return layers;
   },
+
   _getPixelRatio: function (context) {
 
     var backingStore = context.backingStorePixelRatio ||

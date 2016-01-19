@@ -119,9 +119,12 @@ RenderingInterface.prototype.run = function(context, features, tile, draw){
       } else if (typeof instruction.color == 'function') {
         //fill individually
         features.forEach(function(feature){
-          context.fillStyle = instruction.color(feature);
-          draw(feature);
-          context.fill();
+          var fillStyle = instruction.color(feature);
+          if (fillStyle) {
+            context.fillStyle = instruction.color(feature);
+            draw(feature);
+            context.fill();
+          }
         });
       } else {
         throw new Error('fill color must be string or function, is type '+(typeof instruction.color));
@@ -139,15 +142,17 @@ RenderingInterface.prototype.run = function(context, features, tile, draw){
           var lineWidth = (typeof instruction.width == 'function') ? instruction.width(feature) : instruction.width;
           var strokeStyle = (typeof instruction.color == 'function') ? instruction.color(feature) : instruction.color;
 
-          if (typeof instruction.color == 'undefined' && Array.isArray(lineWidth)) {
+          if (typeof instruction.color === 'undefined' && Array.isArray(lineWidth)) {
             strokeStyle = lineWidth[1];
             lineWidth = lineWidth[0];
           }
 
-          context.lineWidth = lineWidth;
-          context.strokeStyle = strokeStyle;
-          draw(feature);
-          context.stroke();
+          if (lineWidth && strokeStyle) {
+            context.lineWidth = lineWidth;
+            context.strokeStyle = strokeStyle;
+            draw(feature);
+            context.stroke();
+          }
         });
       } else {
         throw new Error('Expected stroke(number or function, string or function) or stroke(function), got stroke('+(typeof instruction.width)+', '+(typeof instruction.color)+')');
